@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+  <h2>Import Team Data</h2>
+  <form method="post">
+    {{ form.hidden_tag() }}
+    <p>{{ form.team_name.label }}<br>{{ form.team_name() }}</p>
+    <p>{{ form.team_id.label }}<br>{{ form.team_id() }}</p>
+    <p>{{ form.gender.label }}<br>{{ form.gender() }}</p>
+    <p>{{ form.year.label }}<br>{{ form.year() }}</p>
+    <p>{{ form.pro.label }} {{ form.pro() }}</p>
+    <p><button type="submit">Scrape Team Data</button></p>
+  </form>
+
+  {% if success %}
+    <div>
+      <strong>Done:</strong>
+      {{ swimmers_count }} swimmers imported, {{ times_count }} times recorded.
+    </div>
+  {% endif %}
+{% endblock %}
