@@ -26,7 +26,6 @@ class ScrapeForm(FlaskForm):
     year      = IntegerField(
         'Year', validators=[DataRequired(), NumberRange(min=1900, max=2100)]
     )
-    pro       = BooleanField('Pro Team? (college if unchecked)')
 
 class SelectionForm(FlaskForm):
     teams = MultiCheckboxField('Team & Season', coerce=str)

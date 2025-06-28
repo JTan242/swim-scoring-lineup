@@ -1,6 +1,7 @@
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db
+from sqlalchemy import Index
 
 user_teams = db.Table(
     'user_teams',
@@ -41,11 +42,18 @@ class Event(db.Model):
     times   = db.relationship('Time', backref='event', lazy=True)
 
 class Time(db.Model):
-    id          = db.Column(db.Integer, primary_key=True)
-    swimmer_id  = db.Column(db.Integer, db.ForeignKey('swimmer.id'))
-    event_id    = db.Column(db.Integer, db.ForeignKey('event.id'))
-    time_secs   = db.Column(db.Numeric)
-    meet        = db.Column(db.String(200))
-    date        = db.Column(db.Date)
-    season_year = db.Column(db.Integer, nullable=False, index=True)
+    __tablename__ = 'time'
+    __table_args__ = (
+        Index('ix_time_event_time', 'event_id', 'time_secs'),
+        Index('ix_time_season',     'season_year'),
+        Index('ix_time_swimmer',    'swimmer_id'),
+    )
+
+    id           = db.Column(db.Integer, primary_key=True)
+    swimmer_id   = db.Column(db.Integer, db.ForeignKey('swimmer.id'), index=True)
+    event_id     = db.Column(db.Integer, db.ForeignKey('event.id'),   index=True)
+    time_secs    = db.Column(db.Numeric, nullable=False)
+    meet         = db.Column(db.String(200))
+    date         = db.Column(db.Date)
+    season_year  = db.Column(db.Integer, index=True)
 

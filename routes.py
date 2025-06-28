@@ -2,8 +2,14 @@ import itertools
 import datetime
 import importlib
 import requests
+from io import BytesIO
+import pandas as pd
 from bs4 import BeautifulSoup
-
+import io, csv
+from flask import Response
+from io import BytesIO
+import pandas as pd
+import itertools
 from flask import (
     Blueprint, render_template, request,
     flash, redirect, url_for, current_app
@@ -148,11 +154,25 @@ def scrape():
     form = ScrapeForm()
     if form.validate_on_submit():
         team_name, team_id = form.team_name.data, form.team_id.data
-        gender, year, pro  = form.gender.data, form.year.data, form.pro.data
+        gender, year = form.gender.data, form.year.data,
+
+        # skip if already scraped this team+season
+        existing = (
+            Time.query
+                .join(Swimmer)
+                .filter(
+                    Swimmer.team_id==team_id,
+                    Time.season_year==year
+                )
+                .first()
+        )
+        if existing:
+            flash(f"Data for {team_name} ({year}) is already in the database.", "info")
+            return render_template('scrape.html', form=form)
 
         roster = ss.getRoster(
             team=team_name, team_ID=team_id,
-            gender=gender, year=year, pro=pro
+            gender=gender, year=year
         )
 
         team = Team.query.filter_by(name=team_name).first() or Team(name=team_name)
@@ -225,13 +245,12 @@ def scrape():
     return render_template('scrape.html', form=form)
 
 # DASHBOARD & SCORING 
-
 @main.route('/select', methods=['GET','POST'])
 @login_required
 def select():
     form = SelectionForm()
 
-    # Build Team–Season checkboxes 
+    # ─── Build Team–Season checkboxes ─────────────────────────────────────
     pairs = (
         db.session.query(Team.id, Team.name, Time.season_year)
                   .join(Team.swimmers).join(Swimmer.times)
@@ -240,18 +259,40 @@ def select():
                   .all()
     )
     form.teams.choices = [
-        (f"{tid}:{yr}", f"{yr} {tname}") for tid, tname, yr in pairs
+        (f"{tid}:{yr}", f"{yr} {tname}")
+        for tid, tname, yr in pairs
     ]
+    # catch “remove” action **before** any of your select/recalc/export logic
+    if request.method == 'POST' and request.form.get('action') == 'remove':
+        to_delete = request.form.getlist('teams')
+        # for each “team_id:year”
+        for ts in to_delete:
+            team_id_str, year_str = ts.split(':')
+            tid, yr = int(team_id_str), int(year_str)
 
-    # Build Event dropdown
+            # delete every Time for swimmers on that team in that season
+            Time.query\
+                .filter(
+                    Time.season_year == yr,
+                    Time.swimmer.has(team_id=tid)
+                )\
+                .delete(synchronize_session=False)
+
+        db.session.commit()
+        flash(f"Removed data for {len(to_delete)} team-season(s).", "warning")
+        return redirect(url_for('main.select'))
+    
+    # ─── Build Event dropdown ─────────────────────────────────────────────
     relay_opts = [
         (key, f"{' '.join(key.split('_')[1:]).title()} Relay")
         for key in RELAYS
     ]
     indiv_opts = [
         (str(e.id), e.name)
-        for e in Event.query.filter(Event.name.in_(INDIVIDUAL_EVENTS))\
-                              .order_by(Event.name).all()
+        for e in Event.query
+                      .filter(Event.name.in_(INDIVIDUAL_EVENTS))
+                      .order_by(Event.name)
+                      .all()
     ]
     form.event.choices = relay_opts + indiv_opts
 
@@ -259,30 +300,28 @@ def select():
     excluded = set()
 
     if request.method == 'POST':
+        # ─── Reconstruct exclusions ────────────────────────────────────────
         existing_excl = {
-            int(x) for x in request.form.getlist('excluded')
-            if x.isdigit()
+            int(x) for x in request.form.getlist('excluded') if x.isdigit()
         }
         raw_ids = [
-            int(x) for x in request.form.getlist('time_id')
-            if x.isdigit()
+            int(x) for x in request.form.getlist('time_id') if x.isdigit()
         ]
-        if request.form.get('event') in RELAYS:
+        ev = request.form['event']
+        if ev in RELAYS:
             kept = {
                 int(x) for x in request.form.getlist('include_time_id')
                 if x.isdigit()
             }
-            newly_excl = set(raw_ids) - kept
         else:
-            kept = set()
-            for idx, tid in enumerate(raw_ids):
-                if request.form.get(f'include_{idx}'):
-                    kept.add(tid)
-            newly_excl = set(raw_ids) - kept
+            kept = {
+                raw_ids[i]
+                for i in range(len(raw_ids))
+                if request.form.get(f'include_{i}')
+            }
+        excluded = existing_excl | (set(raw_ids) - kept)
 
-        excluded = existing_excl | newly_excl
-
-        # Validate team-seasons
+        # ─── Validate team–seasons ─────────────────────────────────────────
         selected = request.form.getlist('teams')
         if not selected:
             flash("Select at least one Team–Season.", "danger")
@@ -292,55 +331,45 @@ def select():
                                    excluded=excluded,
                                    RELAYS=RELAYS)
 
-        # Restore form fields
+        # ─── Restore form fields ───────────────────────────────────────────
         form.teams.data        = selected
-        form.event.data        = ev       = request.form['event']
-        form.top_n.data        = top_n    = int(request.form['top_n'])
-        scoring = request.form.get('scoring_mode', 'unscored')
-        form.scoring_mode.data = scoring
+        form.event.data        = ev
+        form.top_n.data        = top_n = int(request.form['top_n'])
+        form.scoring_mode.data = scoring = request.form.get('scoring_mode', 'unscored')
 
         team_ids = [int(x.split(':')[0]) for x in selected]
         seasons  = [int(x.split(':')[1]) for x in selected]
 
-        # Individual‐Event Branch 
-        if ev not in RELAYS:
-            raw_rows = (
-                db.session.query(
-                    Time,
-                    Swimmer.name.label('swimmer_name'),
-                    Team.name.label('team_name'),
-                    Time.season_year.label('season')
-                )
-                .join(Time.swimmer)
-                .join(Swimmer.team)
-                .filter(
-                    Team.id.in_(team_ids),
-                    Time.event_id == int(ev),
-                    Time.season_year.in_(seasons),
-                    ~Time.id.in_(excluded)
-                )
-                .order_by(Time.time_secs)
-                .limit(top_n * 2)
-                .all()
-            )
 
-            seen_names = set()
-            distinct    = []
-            # keep first occurrence of each name
-            for row in raw_rows:
-                name = row.swimmer_name
-                if name in seen_names:
+        # Individual‐Event
+        if ev not in RELAYS:
+            q = (
+                db.session.query(Time, Swimmer.name.label('swimmer_name'),
+                                 Team.name.label('team_name'),
+                                 Time.season_year.label('season'))
+                          .join(Time.swimmer).join(Swimmer.team)
+                          .filter(
+                              Team.id.in_(team_ids),
+                              Time.event_id == int(ev),
+                              Time.season_year.in_(seasons),
+                              ~Time.id.in_(excluded)
+                          )
+                          .order_by(Time.time_secs)
+                          .limit(top_n * 2)
+                          .all()
+            )
+            seen = set(); distinct = []
+            for row in q:
+                if row.swimmer_name in seen:
                     continue
-                seen_names.add(name)
+                seen.add(row.swimmer_name)
                 distinct.append(row)
                 if len(distinct) >= top_n:
                     break
-
-            # build  result list
             for idx, row in enumerate(distinct, start=1):
                 secs = float(row.Time.time_secs)
-                mins, sec = divmod(secs, 60)
-                fmt = f"{int(mins)}:{sec:05.2f}"
+                m, s = divmod(secs, 60)
+                t_fmt = f"{int(m)}:{s:05.2f}"
                 swimmers.append({
                     'time_id':        row.Time.id,
                     'combo_rank':     idx,
@@ -350,21 +379,18 @@ def select():
                     'team':           row.team_name,
                     'season':         row.season,
                     'time':           secs,
-                    'time_fmt':       fmt,
+                    'time_fmt':       t_fmt,
                     'combo_time':     secs,
-                    'combo_time_fmt': fmt,
+                    'combo_time_fmt': t_fmt,
                     'points':         INDIV_SCORE[idx-1] if idx <= len(INDIV_SCORE) else 0
                 })
+            return render_template('select.html',
+                                   form=form,
+                                   swimmers=swimmers,
+                                   excluded=excluded,
+                                   RELAYS=RELAYS)
 
-            return render_template(
-                'select.html',
-                form=form,
-                swimmers=swimmers,
-                excluded=excluded,
-                RELAYS=RELAYS
-            )
-
-        #  Relay Branch
+        # ─── Build pools for relays ────────────────────────────────────────
         pools = {}
         for tid, tname, yr in pairs:
             key = f"{tid}:{yr}"
@@ -372,7 +398,6 @@ def select():
                 continue
 
             if ev != 'relay_medley':
-                # freestyle relays
                 dist = RELAYS[ev]
                 rows = (
                     db.session.query(Time, Swimmer.id, Swimmer.name)
@@ -380,25 +405,23 @@ def select():
                               .filter(
                                   Swimmer.team_id==tid,
                                   Time.season_year==yr,
-                                  Time.event.has(name=f"{dist} Free",course='Y')
+                                  Time.event.has(name=f"{dist} Free", course='Y')
                               )
                               .order_by(Time.time_secs)
                               .all()
                 )
                 pools[key] = [
                     {
-                      'time_id':    tr.id,
-                      'swimmer_id': sid,
-                      'name':       nm,
-                      'time':       float(tr.time_secs),
-                      'stroke':     'Free'
+                        'time_id':    tr.id,
+                        'swimmer_id': sid,
+                        'name':       nm,
+                        'time':       float(tr.time_secs),
+                        'stroke':     'Free'
                     }
                     for tr, sid, nm in rows
                     if tr.id not in excluded
                 ]
-
             else:
-                # medley relays 
                 strokes = ['Back','Breast','Fly','Free']
                 by_sw = {}
                 for stroke in strokes:
@@ -408,7 +431,7 @@ def select():
                                   .filter(
                                       Swimmer.team_id==tid,
                                       Time.season_year==yr,
-                                      Time.event.has(name=f"100 {stroke}",course='Y')
+                                      Time.event.has(name=f"100 {stroke}", course='Y')
                                   )
                                   .order_by(Time.time_secs)
                                   .all()
@@ -416,79 +439,333 @@ def select():
                     for tr, sid, nm in rows:
                         if tr.id in excluded:
                             continue
-                        entry = by_sw.setdefault(sid, {
+                        ent = by_sw.setdefault(sid, {
                             'swimmer_id': sid,
                             'name':       nm,
                             'times':      {},
                             'time_ids':   {}
                         })
-                        entry['times'][stroke]    = float(tr.time_secs)
-                        entry['time_ids'][stroke] = tr.id
+                        ent['times'][stroke]    = float(tr.time_secs)
+                        ent['time_ids'][stroke] = tr.id
+                pools[key] = [v for v in by_sw.values() if len(v['times']) == 4]
 
-                pools[key] = [v for v in by_sw.values() if len(v['times'])==4]
+        if 'export_excel' in request.form:
+            import pandas as pd
+            from io import BytesIO
+            from itertools import permutations
 
-        # Non-Scoring Relay Mode 
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                # 1) One sheet per individual event
+                for ev_name in INDIVIDUAL_EVENTS:
+                    ev_obj = Event.query.filter_by(name=ev_name, course='Y').first()
+                    if not ev_obj:
+                        continue
+
+                    rows = (
+                        db.session.query(
+                            Time, Swimmer.name.label('swimmer'),
+                            Team.name.label('team'),
+                            Time.season_year.label('season')
+                        )
+                        .join(Time.swimmer)
+                        .join(Swimmer.team)
+                        .filter(
+                            Team.id.in_(team_ids),
+                            Time.event_id==ev_obj.id,
+                            Time.season_year.in_(seasons),
+                            ~Time.id.in_(excluded)
+                        )
+                        .order_by(Time.time_secs)
+                        .all()
+                    )
+
+                    data = []
+                    for i, (t, swimmer, team, season) in enumerate(rows, start=1):
+                        m, s = divmod(float(t.time_secs), 60)
+                        time_fmt = f"{int(m)}:{s:05.2f}"
+                        pts = INDIV_SCORE[i-1] if i <= len(INDIV_SCORE) else 0
+                        data.append({
+                            'Team/Season': f"{team} ({season})",
+                            'Swimmer':     swimmer,
+                            'Time':        time_fmt,
+                            'Points':      pts
+                        })
+
+                    pd.DataFrame(data).to_excel(
+                        writer,
+                        sheet_name=ev_name[:31],
+                        index=False
+                    )
+
+                # 2) Two sheets per relay type: Unscored & Scored
+                for relay_key, dist in RELAYS.items():
+                    # build pool per team–season for this relay
+                    relay_pools = {}
+                    for tid, tname, yr in pairs:
+                        key = f"{tid}:{yr}"
+                        if key not in selected:
+                            continue
+
+                        if relay_key != 'relay_medley':
+                            rows = (
+                                db.session.query(Time, Swimmer.id, Swimmer.name)
+                                          .join(Time.swimmer)
+                                          .filter(
+                                              Swimmer.team_id==tid,
+                                              Time.season_year==yr,
+                                              Time.event.has(
+                                                  name=f"{dist} Free", course='Y'
+                                              )
+                                          )
+                                          .order_by(Time.time_secs)
+                                          .all()
+                            )
+                            relay_pools[key] = [
+                                {
+                                  'time_id':    tr.id,
+                                  'swimmer_id': sid,
+                                  'name':       nm,
+                                  'time':       float(tr.time_secs),
+                                  'stroke':     'Free'
+                                }
+                                for tr, sid, nm in rows
+                                if tr.id not in excluded
+                            ]
+                        else:
+                            # 4×100 Medley
+                            strokes = ['Back','Breast','Fly','Free']
+                            by_sw = {}
+                            for st in strokes:
+                                rows = (
+                                    db.session.query(Time, Swimmer.id, Swimmer.name)
+                                              .join(Time.swimmer)
+                                              .filter(
+                                                  Swimmer.team_id==tid,
+                                                  Time.season_year==yr,
+                                                  Time.event.has(
+                                                      name=f"100 {st}", course='Y'
+                                                  )
+                                              )
+                                              .order_by(Time.time_secs)
+                                              .all()
+                                )
+                                for tr, sid, nm in rows:
+                                    if tr.id in excluded:
+                                        continue
+                                    ent = by_sw.setdefault(sid, {
+                                        'swimmer_id': sid,
+                                        'name':       nm,
+                                        'times':      {},
+                                        'time_ids':   {}
+                                    })
+                                    ent['times'][st]    = float(tr.time_secs)
+                                    ent['time_ids'][st] = tr.id
+
+                            relay_pools[key] = [
+                                v for v in by_sw.values() if len(v['times'])==4
+                            ]
+
+                    # a) Unscored sheet
+                    un_rows = []
+                    for key, pool in relay_pools.items():
+                        team_label = dict(form.teams.choices)[key]
+                        relay_num = 1
+                        temp = pool[:]
+                        strokes = None if relay_key!='relay_medley' else ['Back','Breast','Fly','Free']
+
+                        while len(temp) >= 4 and relay_num <= top_n:
+                            if strokes is None:
+                                best4 = sorted(temp, key=lambda x: x['time'])[:4]
+                            else:
+                                best4 = []
+                                for st in strokes:
+                                    pick = min(temp, key=lambda x: x['times'][st])
+                                    best4.append({
+                                        'time_id':    pick['time_ids'][st],
+                                        'swimmer_id': pick['swimmer_id'],
+                                        'name':       pick['name'],
+                                        'stroke':     st,
+                                        'time':       pick['times'][st]
+                                    })
+                            total = sum(x['time'] for x in best4)
+                            for leg in best4:
+                                m, s = divmod(leg['time'], 60)
+                                un_rows.append({
+                                    'Relay #':     relay_num,
+                                    'Team/Season': team_label,
+                                    'Swimmer':     leg['name'],
+                                    'Stroke':      leg['stroke'],
+                                    'Split':       f"{int(m)}:{s:05.2f}",
+                                    'Relay Time':  f"{int(total//60)}:{total%60:05.2f}"
+                                })
+                            used = {x['swimmer_id'] for x in best4}
+                            temp = [x for x in temp if x['swimmer_id'] not in used]
+                            relay_num += 1
+
+                    df_un = pd.DataFrame(un_rows)
+                    sheet_un = f"{relay_key.split('_',1)[1].title()} Unscored"
+                    df_un.to_excel(writer, sheet_name=sheet_un[:31], index=False)
+
+                    # b) Scored sheet
+                    scored_combos = []
+                    for key, pool in relay_pools.items():
+                        team_label = dict(form.teams.choices)[key]
+                        tid, yr = key.split(':')
+                        if relay_key!='relay_medley':
+                            sorted_pool = sorted(pool, key=lambda x: x['time'])
+                            if len(sorted_pool)>=4:
+                                scored_combos.append({
+                                    'leg':  sorted_pool[:4],
+                                    'time': sum(x['time'] for x in sorted_pool[:4]),
+                                    'type':'A',
+                                    'team':team_label,
+                                    'season':int(yr)
+                                })
+                            if len(sorted_pool)>=8:
+                                scored_combos.append({
+                                    'leg':  sorted_pool[4:8],
+                                    'time': sum(x['time'] for x in sorted_pool[4:8]),
+                                    'type':'B',
+                                    'team':team_label,
+                                    'season':int(yr)
+                                })
+                        else:
+                            strokes = ['Back','Breast','Fly','Free']
+                            perms = []
+                            for quad in permutations(pool, 4):
+                                tot = sum(quad[i]['times'][strokes[i]] for i in range(4))
+                                perms.append((tot, quad))
+                            perms.sort(key=lambda x:x[0])
+                            if perms:
+                                t1, q1 = perms[0]
+                                scored_combos.append({
+                                    'leg':  [
+                                        {
+                                          'time_id':    q1[i]['time_ids'][strokes[i]],
+                                          'swimmer_id': q1[i]['swimmer_id'],
+                                          'name':       q1[i]['name'],
+                                          'stroke':     strokes[i],
+                                          'time':       q1[i]['times'][strokes[i]]
+                                        }
+                                        for i in range(4)
+                                    ],
+                                    'time':   t1,
+                                    'type':   'A',
+                                    'team':   team_label,
+                                    'season': int(yr)
+                                })
+                                used_ids = {p['swimmer_id'] for p in q1}
+                                rem = [x for x in pool if x['swimmer_id'] not in used_ids]
+                                if len(rem)>=4:
+                                    perms2=[]
+                                    for quad in permutations(rem, 4):
+                                        tot2 = sum(quad[i]['times'][strokes[i]] for i in range(4))
+                                        perms2.append((tot2,quad))
+                                    perms2.sort(key=lambda x:x[0])
+                                    t2, q2 = perms2[0]
+                                    scored_combos.append({
+                                        'leg': [
+                                            {
+                                              'time_id':    q2[i]['time_ids'][strokes[i]],
+                                              'swimmer_id': q2[i]['swimmer_id'],
+                                              'name':       q2[i]['name'],
+                                              'stroke':     strokes[i],
+                                              'time':       q2[i]['times'][strokes[i]]
+                                            }
+                                            for i in range(4)
+                                        ],
+                                        'time':   t2,
+                                        'type':   'B',
+                                        'team':   team_label,
+                                        'season': int(yr)
+                                    })
+
+                    scored_rows = []
+                    for rank, combo in enumerate(scored_combos, start=1):
+                        pts = RELAY_SCORE[rank-1] if rank <= len(RELAY_SCORE) else 0
+                        for leg in combo['leg']:
+                            m, s = divmod(leg['time'], 60)
+                            scored_rows.append({
+                                'Relay #':     rank,
+                                'Team/Season': combo['team'],
+                                'Swimmer':     leg['name'],
+                                'Stroke':      leg['stroke'],
+                                'Split':       f"{int(m)}:{s:05.2f}",
+                                'Relay Time':  f"{int(combo['time']//60)}:{combo['time']%60:05.2f}",
+                                'Points':      pts
+                            })
+
+                    df_sc = pd.DataFrame(scored_rows)
+                    sheet_sc = f"{relay_key.split('_',1)[1].title()} Scored"
+                    df_sc.to_excel(writer, sheet_name=sheet_sc[:31], index=False)
+
+            output.seek(0)
+            return Response(
+                output.getvalue(),
+                mimetype=(
+                  'application/vnd.openxmlformats-'
+                  'officedocument.spreadsheetml.sheet'
+                ),
+                headers={
+                  'Content-Disposition':
+                  'attachment;filename=swim_results.xlsx'
+                }
+            )
+
+        # ─── Interactive results in-page ─────────────────────────────────
+
+        # Relay (non-scoring)
         if scoring == 'unscored':
             all_squads = []
             for key, pool in pools.items():
-                tid, yr = key.split(':')
-                team_label = dict(form.teams.choices)[key]
-
+                relay_num = 1
                 if ev != 'relay_medley':
                     temp = pool[:]
-                    while len(temp) >= 4:
+                    while len(temp) >= 4 and relay_num <= top_n:
                         best4 = sorted(temp, key=lambda x: x['time'])[:4]
                         total = sum(x['time'] for x in best4)
-                        all_squads.append({
-                            'leg':    best4,
-                            'time':   total,
-                            'team':   team_label,
-                            'season': int(yr)
-                        })
+                        all_squads.append({'leg': best4, 'time': total, 'relay_num': relay_num})
                         used = {s['swimmer_id'] for s in best4}
                         temp = [s for s in temp if s['swimmer_id'] not in used]
+                        relay_num += 1
                 else:
                     temp = pool[:]
                     strokes = ['Back','Breast','Fly','Free']
-                    while len(temp) >= 4:
+                    while len(temp) >= 4 and relay_num <= top_n:
                         combo = []
-                        for stroke in strokes:
-                            swimmer = min(temp, key=lambda x: x['times'][stroke])
+                        for st in strokes:
+                            sw = min(temp, key=lambda x: x['times'][st])
                             combo.append({
-                                'time_id':    swimmer['time_ids'][stroke],
-                                'swimmer_id': swimmer['swimmer_id'],
-                                'name':       swimmer['name'],
-                                'stroke':     stroke,
-                                'time':       swimmer['times'][stroke]
+                                'time_id':    sw['time_ids'][st],
+                                'swimmer_id': sw['swimmer_id'],
+                                'name':       sw['name'],
+                                'stroke':     st,
+                                'time':       sw['times'][st]
                             })
-                            temp = [s for s in temp if s['swimmer_id'] != swimmer['swimmer_id']]
+                            temp = [s for s in temp if s['swimmer_id'] != sw['swimmer_id']]
                         total = sum(x['time'] for x in combo)
-                        all_squads.append({
-                            'leg':    combo,
-                            'time':   total,
-                            'team':   team_label,
-                            'season': int(yr)
-                        })
-
+                        all_squads.append({'leg': combo, 'time': total, 'relay_num': relay_num})
+                        relay_num += 1
             all_squads.sort(key=lambda x: x['time'])
-            all_squads = all_squads[:top_n]
-            for idx, combo in enumerate(all_squads, start=1):
-                mins_c, sec_c = divmod(combo['time'], 60)
-                combo_fmt = f"{int(mins_c)}:{sec_c:05.2f}"
-                for leg in combo['leg']:
-                    mins, sec = divmod(leg['time'], 60)
-                    split_fmt = f"{int(mins)}:{sec:05.2f}"
+            for squad in all_squads:
+                idx = squad['relay_num']
+                m_c, s_c = divmod(squad['time'], 60)
+                combo_fmt = f"{int(m_c)}:{s_c:05.2f}"
+                for leg in squad['leg']:
+                    m, s = divmod(leg['time'], 60)
+                    split = f"{int(m)}:{s:05.2f}"
                     swimmers.append({
                         'time_id':        leg['time_id'],
                         'combo_rank':     idx,
-                        'team':           combo['team'],
-                        'season':         combo['season'],
+                        'team':           dict(form.teams.choices)[key],
+                        'season':         int(key.split(':')[1]),
                         'stroke':         leg['stroke'],
                         'swimmer_id':     leg['swimmer_id'],
                         'name':           leg['name'],
                         'time':           leg['time'],
-                        'time_fmt':       split_fmt,
-                        'combo_time':     combo['time'],
+                        'time_fmt':       split,
+                        'combo_time':     squad['time'],
                         'combo_time_fmt': combo_fmt,
                         'points':         None
                     })
@@ -498,31 +775,16 @@ def select():
                                    excluded=excluded,
                                    RELAYS=RELAYS)
 
-
-        # Scoring Relay Mode 
+        # Relay (scoring)
         combos = []
         for key, pool in pools.items():
-            tid, yr = key.split(':')
-            team_label = dict(form.teams.choices)[key]
-
+            relay_a = []; relay_b = []
             if ev != 'relay_medley':
                 sorted4 = sorted(pool, key=lambda x: x['time'])
                 if len(sorted4) >= 4:
-                    combos.append({
-                        'leg':    sorted4[:4],
-                        'time':   sum(x['time'] for x in sorted4[:4]),
-                        'type':   'A',
-                        'team':   team_label,
-                        'season': int(yr)
-                    })
+                    relay_a = sorted4[:4]
                 if len(sorted4) >= 8:
-                    combos.append({
-                        'leg':    sorted4[4:8],
-                        'time':   sum(x['time'] for x in sorted4[4:8]),
-                        'type':   'B',
-                        'team':   team_label,
-                        'season': int(yr)
-                    })
+                    relay_b = sorted4[4:8]
             else:
                 strokes = ['Back','Breast','Fly','Free']
                 bests = []
@@ -530,66 +792,31 @@ def select():
                     total = sum(quad[i]['times'][strokes[i]] for i in range(4))
                     bests.append((total, quad))
                 bests.sort(key=lambda x: x[0])
-
                 if bests:
-                    t1, q1 = bests[0]
-                    combos.append({
-                        'leg':    [
-                            {
-                                'time_id':    q1[i]['time_ids'][strokes[i]],
-                                'swimmer_id': q1[i]['swimmer_id'],
-                                'name':       q1[i]['name'],
-                                'stroke':     strokes[i],
-                                'time':       q1[i]['times'][strokes[i]]
-                            } for i in range(4)
-                        ],
-                        'time':   t1,
-                        'type':   'A',
-                        'team':   team_label,
-                        'season': int(yr)
-                    })
-                    used = {q1[i]['swimmer_id'] for i in range(4)}
-                    rem = [s for s in pool if s['swimmer_id'] not in used]
-                    if len(rem) >= 4:
-                        bests2 = []
-                        for quad in itertools.permutations(rem, 4):
-                            total = sum(quad[i]['times'][strokes[i]] for i in range(4))
-                            bests2.append((total, quad))
-                        bests2.sort(key=lambda x: x[0])
-                        t2, q2 = bests2[0]
-                        combos.append({
-                            'leg':    [
-                                {
-                                    'time_id':    q2[i]['time_ids'][strokes[i]],
-                                    'swimmer_id': q2[i]['swimmer_id'],
-                                    'name':       q2[i]['name'],
-                                    'stroke':     strokes[i],
-                                    'time':       q2[i]['times'][strokes[i]]
-                                } for i in range(4)
-                            ],
-                            'time':   t2,
-                            'type':   'B',
-                            'team':   team_label,
-                            'season': int(yr)
-                        })
+                    relay_a = bests[0][1]
+                if len(bests) > 1:
+                    _, quad2 = bests[1]
+                    relay_b = quad2
+            if relay_a:
+                combos.append({'leg': relay_a, 'time': sum(x['time'] for x in relay_a), 'type':'A'})
+            if relay_b:
+                combos.append({'leg': relay_b, 'time': sum(x['time'] for x in relay_b), 'type':'B'})
 
-        # rank & score A/B
-        A = sorted([c for c in combos if c['type']=='A'], key=lambda x: x['time'])
-        B = sorted([c for c in combos if c['type']=='B'], key=lambda x: x['time'])
-        scored = A[:8] + B[:8]
-        scored = (A[:8] + B[:8])[:top_n]
+        A = sorted([c for c in combos if c['type']=='A'], key=lambda x: x['time'])[:8]
+        B = sorted([c for c in combos if c['type']=='B'], key=lambda x: x['time'])[:8]
+        scored = (A + B)[:top_n]
         for idx, c in enumerate(scored, start=1):
             pts = RELAY_SCORE[idx-1] if idx <= len(RELAY_SCORE) else 0
-            mins_c, sec_c = divmod(c['time'], 60)
-            combo_fmt = f"{int(mins_c)}:{sec_c:05.2f}"
+            m_c, s_c = divmod(c['time'], 60)
+            combo_fmt = f"{int(m_c)}:{s_c:05.2f}"
             for leg in c['leg']:
-                mins, sec = divmod(leg['time'], 60)
-                split_fmt = f"{int(mins)}:{sec:05.2f}"
+                m, s = divmod(leg['time'], 60)
+                split_fmt = f"{int(m)}:{s:05.2f}"
                 swimmers.append({
                     'time_id':        leg['time_id'],
                     'combo_rank':     idx,
-                    'team':           c['team'],
-                    'season':         c['season'],
+                    'team':           dict(form.teams.choices)[key],
+                    'season':         int(key.split(':')[1]),
                     'stroke':         leg['stroke'],
                     'swimmer_id':     leg['swimmer_id'],
                     'name':           leg['name'],
@@ -605,10 +832,10 @@ def select():
                                swimmers=swimmers,
                                excluded=excluded,
                                RELAYS=RELAYS)
-    return render_template(
-        'select.html',
-        form=form,
-        swimmers=swimmers,
-        excluded=excluded,
-        RELAYS=RELAYS
-    )
+
+    # GET
+    return render_template('select.html',
+                           form=form,
+                           swimmers=swimmers,
+                           excluded=excluded,
+                           RELAYS=RELAYS)
