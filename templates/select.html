@@ -15,17 +15,8 @@
 </style>
 
 <h2>Select Team-Seasons &amp; Event</h2>
-
 <form method="post" action="{{ url_for('main.select') }}">
   {{ form.hidden_tag() }}
-
-  <p>
-    <input
-      type="text"
-      id="teamSearch"
-      placeholder="Search teams…"
-      style="width:100%;padding:0.5em;margin-bottom:0.5em;">
-  </p>
 
   <fieldset>
     <legend>{{ form.teams.label }}</legend>
@@ -49,96 +40,109 @@
   </p>
   {% endif %}
 
-  {# carry every swimmer/time and exclusion across submits #}
-  {% for s in swimmers %}
-    <input type="hidden" name="time_id"    value="{{ s.time_id }}">
-  {% endfor %}
-  {% for ex in excluded %}
-    <input type="hidden" name="excluded"   value="{{ ex }}">
-  {% endfor %}
-
   <p>
-    <button type="submit" name="action" value="get">Get Top Swimmers</button>
+    <button type="submit">Get Top Swimmers</button>
     <button type="submit" name="export_excel" value="1">Export Excel</button>
-    <button type="submit" name="action" value="recalc">Recalculate</button>
-    <button type="submit" name="action" value="remove" style="color:red">
-      Remove Selected Team/Season
-    </button>    <a href="{{ url_for('main.select') }}" class="button">Reset All</a>
+    <button
+      type="submit"
+      name="remove_ts"
+      value="1"
+      style="color:#c00"
+      onclick="return confirm('Are you sure you want to remove all data for the selected team/season(s)?');">
+      Remove Team/Season
+    </button>
+    <a href="{{ url_for('main.select') }}" class="button">Reset All</a>
   </p>
-
-  {% if swimmers %}
-    <table>
-      <thead>
-        <tr>
-          <th>Include?</th>
-          {% if form.event.data not in RELAYS %}
-            <th>Place</th><th>Name</th><th>Team (Season)</th>
-            <th>Time</th><th>Points</th>
-          {% else %}
-            <th>Name</th><th>Team (Season)</th>
-            <th>Stroke</th><th>Split</th>
-            <th>Relay Time</th><th>Points</th>
-          {% endif %}
-        </tr>
-      </thead>
-
-      {% if form.event.data in RELAYS %}
-        {% for group in swimmers|groupby('combo_rank') %}
-        <tbody>
-          <tr class="relay-header">
-            <td colspan="7">Relay {{ group.grouper }}</td>
-          </tr>
-          {% for s in group.list %}
-          <tr>
-            <td>
-              <input
-                type="checkbox"
-                name="include_time_id"
-                value="{{ s.time_id }}"
-                {% if s.time_id not in excluded %}checked{% endif %}>
-            </td>
-            <td>{{ s.name }}</td>
-            <td>{{ s.team }} ({{ s.season }})</td>
-            <td>{{ s.stroke }}</td>
-            <td>{{ s.time_fmt }}</td>
-            <td>{{ s.combo_time_fmt }}</td>
-            <td>{{ s.points or '' }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-        {% endfor %}
-      {% else %}
-        <tbody>
-          {% for s in swimmers %}
-          <tr>
-            <td>
-              <input
-                type="checkbox"
-                name="include_{{ loop.index0 }}"
-                {% if s.time_id not in excluded %}checked{% endif %}>
-            </td>
-            <td>{{ s.combo_rank }}</td>
-            <td>{{ s.name }}</td>
-            <td>{{ s.team }} ({{ s.season }})</td>
-            <td>{{ s.time_fmt }}</td>
-            <td>{{ s.points }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      {% endif %}
-    </table>
-  {% endif %}
-
 </form>
 
-<script>
-  document.getElementById('teamSearch').addEventListener('input', function(e) {
-    const q = e.target.value.toLowerCase();
-    document.querySelectorAll('fieldset label').forEach(label => {
-      label.style.display = label.textContent.toLowerCase().includes(q)
-        ? '' : 'none';
-    });
-  });
-</script>
+{% if swimmers %}
+<form method="post" action="{{ url_for('main.select') }}">
+  {{ form.hidden_tag() }}
+
+  {# carry filters forward #}
+  {% for ts in form.teams.data %}
+    <input type="hidden" name="teams" value="{{ ts }}">
+  {% endfor %}
+  <input type="hidden" name="event"        value="{{ form.event.data }}">
+  <input type="hidden" name="top_n"        value="{{ form.top_n.data }}">
+  <input type="hidden" name="scoring_mode" value="{{ form.scoring_mode.data }}">
+
+  {# carry every time_id #}
+  {% for s in swimmers %}
+    <input type="hidden" name="time_id" value="{{ s.time_id }}">
+  {% endfor %}
+  {# carry forward existing exclusions #}
+  {% for ex in excluded %}
+    <input type="hidden" name="excluded" value="{{ ex }}">
+  {% endfor %}
+
+  <table>
+    <thead>
+      <tr>
+        <th>Include?</th>
+        {% if form.event.data not in RELAYS %}
+          <th>Place</th>
+          <th>Name</th>
+          <th>Team (Season)</th>
+          <th>Time</th>
+          <th>Points</th>
+        {% else %}
+          <th>Name</th>
+          <th>Team (Season)</th>
+          <th>Stroke</th>
+          <th>Split</th>
+          <th>Relay Time</th>
+          <th>Points</th>
+        {% endif %}
+      </tr>
+    </thead>
+
+    {% if form.event.data in RELAYS %}
+      {% for group in swimmers|groupby('combo_rank') %}
+      <tbody>
+        <tr class="relay-header">
+          <td colspan="7">Relay {{ group.grouper }}</td>
+        </tr>
+        {% for s in group.list %}
+        <tr>
+          <td>
+            <input
+              type="checkbox"
+              name="include_time_id"
+              value="{{ s.time_id }}"
+              {% if s.time_id not in excluded %}checked{% endif %}>
+          </td>
+          <td>{{ s.name }}</td>
+          <td>{{ s.team }} ({{ s.season }})</td>
+          <td>{{ s.stroke }}</td>
+          <td>{{ s.time_fmt }}</td>
+          <td>{{ s.combo_time_fmt }}</td>
+          <td>{{ s.points or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      {% endfor %}
+    {% else %}
+      <tbody>
+        {% for s in swimmers %}
+        <tr>
+          <td>
+            <input
+              type="checkbox"
+              name="include_{{ loop.index0 }}"
+              {% if s.time_id not in excluded %}checked{% endif %}>
+          </td>
+          <td>{{ s.combo_rank }}</td>
+          <td>{{ s.name }}</td>
+          <td>{{ s.team }} ({{ s.season }})</td>
+          <td>{{ s.time_fmt }}</td>
+          <td>{{ s.points }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    {% endif %}
+  </table>
+</form>
+{% endif %}
 
 {% endblock %}

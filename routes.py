@@ -39,6 +39,14 @@ RELAYS = {
     'relay_medley':    None
 }
 
+_session = requests.Session()
+_session.headers.update({
+    'User-Agent': 'Mozilla/5.0 …',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept': 'text/html,…',
+    'Referer': 'https://www.swimcloud.com/'
+})
+
 main = Blueprint('main', __name__)
 
 @login_manager.user_loader
@@ -146,7 +154,6 @@ def login():
 def logout():
     logout_user()
     return redirect(url_for('main.login'))
-
 
 @main.route('/scrape', methods=['GET','POST'])
 @login_required
@@ -259,27 +266,32 @@ def select():
                   .all()
     )
     form.teams.choices = [
-        (f"{tid}:{yr}", f"{yr} {tname}")
-        for tid, tname, yr in pairs
+        (f"{tid}:{yr}", f"{yr} {tname}") for tid, tname, yr in pairs
     ]
     # catch “remove” action **before** any of your select/recalc/export logic
-    if request.method == 'POST' and request.form.get('action') == 'remove':
-        to_delete = request.form.getlist('teams')
-        # for each “team_id:year”
-        for ts in to_delete:
-            team_id_str, year_str = ts.split(':')
-            tid, yr = int(team_id_str), int(year_str)
+    if request.method == 'POST' and 'remove_ts' in request.form:
+        # which team/seasons were checked?
+        selected = request.form.getlist('teams')
+        if not selected:
+            flash("Please check at least one Team–Season to remove.", "warning")
+            return redirect(url_for('main.select'))
 
-            # delete every Time for swimmers on that team in that season
-            Time.query\
-                .filter(
-                    Time.season_year == yr,
-                    Time.swimmer.has(team_id=tid)
-                )\
-                .delete(synchronize_session=False)
+        removed_labels = []
+        for ts in selected:
+            tid_str, yr_str = ts.split(':')
+            tid, yr = int(tid_str), int(yr_str)
+            # human‐readable label
+            team = Team.query.get(tid)
+            removed_labels.append(f"{team.name} ({yr})")
+            # delete all Time rows for that team+season
+            Time.query.filter(
+                Time.season_year == yr,
+                Time.swimmer.has(team_id=tid)
+            ).delete(synchronize_session=False)
+            # (optionally) delete swimmers who now have no times, etc.
 
         db.session.commit()
-        flash(f"Removed data for {len(to_delete)} team-season(s).", "warning")
+        flash(f"Removed data for: {', '.join(removed_labels)}.", "success")
         return redirect(url_for('main.select'))
     
     # ─── Build Event dropdown ─────────────────────────────────────────────
@@ -491,12 +503,21 @@ def select():
                             'Time':        time_fmt,
                             'Points':      pts
                         })
+                    df = pd.DataFrame(data)
+                    sheet = ev_name[:31]
+                    df.to_excel(writer, sheet_name=sheet, index=False)
 
-                    pd.DataFrame(data).to_excel(
-                        writer,
-                        sheet_name=ev_name[:31],
-                        index=False
-                    )
+                    # auto-size
+                    ws = writer.sheets[sheet]
+                    for col_idx, col in enumerate(df.columns):
+                        max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
+                        ws.set_column(col_idx, col_idx, max_len)
+
+                    # pd.DataFrame(data).to_excel(
+                    #     writer,
+                    #     sheet_name=ev_name[:31],
+                    #     index=False
+                    # )
 
                 # 2) Two sheets per relay type: Unscored & Scored
                 for relay_key, dist in RELAYS.items():
@@ -604,8 +625,13 @@ def select():
                             relay_num += 1
 
                     df_un = pd.DataFrame(un_rows)
-                    sheet_un = f"{relay_key.split('_',1)[1].title()} Unscored"
-                    df_un.to_excel(writer, sheet_name=sheet_un[:31], index=False)
+                    sheet_un = f"{relay_key.split('_',1)[1].title()} Unscored"[:31]
+                    df_un.to_excel(writer, sheet_name=sheet_un, index=False)
+                    ws_un = writer.sheets[sheet_un]
+                    for ci, col in enumerate(df_un.columns):
+                        w = max(df_un[col].astype(str).map(len).max(), len(col)) + 2
+                        ws_un.set_column(ci, ci, w)
+                    # df_un.to_excel(writer, sheet_name=sheet_un[:31], index=False)
 
                     # b) Scored sheet
                     scored_combos = []
@@ -697,39 +723,57 @@ def select():
                             })
 
                     df_sc = pd.DataFrame(scored_rows)
-                    sheet_sc = f"{relay_key.split('_',1)[1].title()} Scored"
-                    df_sc.to_excel(writer, sheet_name=sheet_sc[:31], index=False)
-
+                    sheet_sc = f"{relay_key.split('_',1)[1].title()} Scored"[:31]
+                    df_sc.to_excel(writer, sheet_name=sheet_sc, index=False)
+                    ws_sc = writer.sheets[sheet_sc]
+                    for ci, col in enumerate(df_sc.columns):
+                        w = max(df_sc[col].astype(str).map(len).max(), len(col)) + 2
+                        ws_sc.set_column(ci, ci, w)
+                    # df_sc.to_excel(writer, sheet_name=sheet_sc[:31], index=False)
+                    
             output.seek(0)
             return Response(
                 output.getvalue(),
-                mimetype=(
-                  'application/vnd.openxmlformats-'
-                  'officedocument.spreadsheetml.sheet'
-                ),
-                headers={
-                  'Content-Disposition':
-                  'attachment;filename=swim_results.xlsx'
-                }
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                headers={'Content-Disposition':'attachment;filename=swim_results.xlsx'}
             )
+            # output.seek(0)
+            # return Response(
+            #     output.getvalue(),
+            #     mimetype=(
+            #       'application/vnd.openxmlformats-'
+            #       'officedocument.spreadsheetml.sheet'
+            #     ),
+            #     headers={
+            #       'Content-Disposition':
+            #       'attachment;filename=swim_results.xlsx'
+            #     }
+            # )
 
         # ─── Interactive results in-page ─────────────────────────────────
 
-        # Relay (non-scoring)
+        # ─── Non-Scoring Relay Mode ─────────────────────────────────────────
         if scoring == 'unscored':
+            # 1) build every team's squads exactly as you already do:
             all_squads = []
             for key, pool in pools.items():
-                relay_num = 1
                 if ev != 'relay_medley':
+                    relay_num = 1
                     temp = pool[:]
                     while len(temp) >= 4 and relay_num <= top_n:
                         best4 = sorted(temp, key=lambda x: x['time'])[:4]
                         total = sum(x['time'] for x in best4)
-                        all_squads.append({'leg': best4, 'time': total, 'relay_num': relay_num})
+                        all_squads.append({
+                            'leg':      best4,
+                            'time':     total,
+                            'team':     dict(form.teams.choices)[key],
+                            'season':   int(key.split(':')[1])
+                        })
                         used = {s['swimmer_id'] for s in best4}
                         temp = [s for s in temp if s['swimmer_id'] not in used]
                         relay_num += 1
                 else:
+                    relay_num = 1
                     temp = pool[:]
                     strokes = ['Back','Breast','Fly','Free']
                     while len(temp) >= 4 and relay_num <= top_n:
@@ -745,21 +789,28 @@ def select():
                             })
                             temp = [s for s in temp if s['swimmer_id'] != sw['swimmer_id']]
                         total = sum(x['time'] for x in combo)
-                        all_squads.append({'leg': combo, 'time': total, 'relay_num': relay_num})
+                        all_squads.append({
+                            'leg':      combo,
+                            'time':     total,
+                            'team':     dict(form.teams.choices)[key],
+                            'season':   int(key.split(':')[1])
+                        })
                         relay_num += 1
+
+            # 2) sort globally by total relay time
             all_squads.sort(key=lambda x: x['time'])
-            for squad in all_squads:
-                idx = squad['relay_num']
-                m_c, s_c = divmod(squad['time'], 60)
-                combo_fmt = f"{int(m_c)}:{s_c:05.2f}"
+
+            # 3) enumerate and append into swimmers with a global combo_rank
+            swimmers.clear()
+            for combo_rank, squad in enumerate(all_squads, start=1):
+                combo_fmt = f"{int(squad['time']//60)}:{squad['time']%60:05.2f}"
                 for leg in squad['leg']:
-                    m, s = divmod(leg['time'], 60)
-                    split = f"{int(m)}:{s:05.2f}"
+                    split = f"{int(leg['time']//60)}:{leg['time']%60:05.2f}"
                     swimmers.append({
                         'time_id':        leg['time_id'],
-                        'combo_rank':     idx,
-                        'team':           dict(form.teams.choices)[key],
-                        'season':         int(key.split(':')[1]),
+                        'combo_rank':     combo_rank,
+                        'team':           squad['team'],
+                        'season':         squad['season'],
                         'stroke':         leg['stroke'],
                         'swimmer_id':     leg['swimmer_id'],
                         'name':           leg['name'],
@@ -769,11 +820,13 @@ def select():
                         'combo_time_fmt': combo_fmt,
                         'points':         None
                     })
+
             return render_template('select.html',
-                                   form=form,
-                                   swimmers=swimmers,
-                                   excluded=excluded,
-                                   RELAYS=RELAYS)
+                                form=form,
+                                swimmers=swimmers,
+                                excluded=excluded,
+                                RELAYS=RELAYS)
+
 
         # Relay (scoring)
         combos = []
@@ -826,7 +879,6 @@ def select():
                     'combo_time_fmt': combo_fmt,
                     'points':         pts
                 })
-
         return render_template('select.html',
                                form=form,
                                swimmers=swimmers,
