@@ -1,3 +1,2 @@
 # swim-scoring-lineup
-
-Working on deployment
+Deprecated due to swimcloud web scraping blockage
