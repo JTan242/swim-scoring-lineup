@@ -1,8 +1,4 @@
-"""
-Swim Scoring & Lineup Optimizer -- Flask application factory.
-
-Entry point: ``python app.py`` starts the development server on port 5001.
-"""
+# Run with: python app.py  (dev server on 5001)
 
 import logging
 import os
@@ -20,7 +16,7 @@ from api import api_bp
 
 
 def _configure_logging(app):
-    """Set up structured logging to stderr and an optional file."""
+    """Log to stderr with a simple format."""
     fmt = logging.Formatter(
         "[%(asctime)s] %(levelname)s in %(module)s: %(message)s"
     )
@@ -35,7 +31,7 @@ def _configure_logging(app):
 
 
 def create_app(test_config=None):
-    """Create and configure the Flask application."""
+    """Flask app factory. test_config overrides for pytest."""
     app = Flask(__name__)
     app.config.from_object(Config)
 
@@ -56,7 +52,7 @@ def create_app(test_config=None):
 
     @app.route("/health")
     def health():
-        """Liveness / readiness probe."""
+        """Kubernetes/Docker liveness — just checks DB is reachable."""
         try:
             db.session.execute("SELECT 1")
             return jsonify(status="ok", db="connected"), 200

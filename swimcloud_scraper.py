@@ -1,12 +1,4 @@
-"""
-swimcloud_scraper  --  Import swim data from SwimCloud.
-
-Public functions:
-
-* :func:`search_teams`       -- fuzzy team search by name (returns ID + metadata).
-* :func:`get_team_times`     -- bulk import: best time per swimmer per event via API.
-* :func:`season_label`       -- human-readable label for a season year.
-"""
+# Pull roster + best times from SwimCloud. search_teams(name), get_team_times(team_id, gender, year), season_label(year).
 
 import logging
 
@@ -27,8 +19,7 @@ _HEADERS = {
 
 _API_BASE = "https://www.swimcloud.com"
 
-# SwimCloud API event codes use the format "stroke|distance|course"
-# where stroke: 1=Free, 2=Back, 3=Breast, 4=Fly, 5=IM  and  course: 1=SCY
+# API codes: stroke|distance|course — stroke 1=Free,2=Back,3=Breast,4=Fly,5=IM; course 1=SCY
 INDIVIDUAL_EVENT_CODES = {
     "1|50|1":    "50 Free",
     "1|100|1":   "100 Free",
@@ -47,39 +38,25 @@ INDIVIDUAL_EVENT_CODES = {
 }
 
 
-# ── Internal helpers ─────────────────────────────────────────────────────────
-
 def _fetch_json(url, params=None, timeout=15):
-    """GET *url* and return the decoded JSON body."""
+    """GET url, return JSON."""
     resp = requests.get(url, headers=_HEADERS, params=params, timeout=timeout)
     resp.raise_for_status()
     return resp.json()
 
 
 def _year_to_season_id(year):
-    """Convert a user-facing year to SwimCloud's internal season_id.
-
-    The user enters the *ending* year of the academic season:
-    ``2025`` means the 2024-2025 season.  SwimCloud's formula is
-    ``season_id = start_year - 1996``, so ``2024 - 1996 = 28``.
-    """
+    """User types 2025 (season 2024-25). SwimCloud wants season_id = (year-1) - 1996."""
     return (year - 1) - 1996
 
 
 def season_label(year):
-    """Return a human-readable season string, e.g. ``'2024-2025'``."""
+    """e.g. 2025 -> '2024-2025'."""
     return f"{year - 1}-{year}"
 
 
-# ── Team search ──────────────────────────────────────────────────────────────
-
 def search_teams(query):
-    """Search SwimCloud for teams whose name matches *query*.
-
-    Returns a list of dicts sorted by relevance::
-
-        [{"name": "University of Pittsburgh", "abbr": "Pittsburgh", "id": 405}, ...]
-    """
+    """Fuzzy search by team name. Returns list of {name, abbr, id}."""
     data = _fetch_json(f"{_API_BASE}/api/search/?q={query}&types=team")
     teams = []
     for item in data:
@@ -96,14 +73,8 @@ def search_teams(query):
     return teams
 
 
-# ── Bulk team times (event-by-event via API) ─────────────────────────────────
-
 def _fetch_event_times(team_id, gender, season_id, event_code):
-    """Fetch one page of best times for a single event from the API.
-
-    Uses ``dont_group=false`` so the API returns **one row per swimmer**
-    (their season-best time for that event).
-    """
+    """One event's top times; dont_group=false gives one row per swimmer (season best)."""
     params = {
         "team_id": team_id,
         "event": event_code,
@@ -133,26 +104,7 @@ def _fetch_event_times(team_id, gender, season_id, event_code):
 
 
 def get_team_times(team_id, gender, year):
-    """Import best times for every individual SCY event for a team + season.
-
-    Iterates over all 14 individual events and calls SwimCloud's
-    ``/api/splashes/top_times/`` endpoint for each.  The API is called with
-    ``dont_group=false`` which returns exactly **one row per swimmer** (their
-    season-best time), already sorted fastest-first.
-
-    Returns::
-
-        {
-            "50 Free":  [{"swimmer_name": "...", "swimmer_id": 123, "time_secs": 20.83}, ...],
-            "100 Free": [...],
-            ...
-        }
-
-    Also collects a de-duplicated roster dict (swimmer_id -> swimmer_name)
-    from all events combined, available via the second return value.
-
-    Returns a tuple ``(events_dict, roster_dict)``.
-    """
+    """Hit top_times for all 14 SCY events. Returns (events_dict, roster_dict). events_dict is name -> list of {swimmer_name, swimmer_id, time_secs}."""
     season_id = _year_to_season_id(year)
     all_events = {}
     roster = {}

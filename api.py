@@ -1,14 +1,4 @@
-"""
-REST API blueprint for programmatic access to swim data.
-
-Endpoints:
-
-* ``GET  /api/teams``                -- list all teams
-* ``GET  /api/teams/:id/swimmers``   -- swimmers on a team
-* ``GET  /api/events``               -- list all events
-* ``GET  /api/results``              -- query times with filters
-* ``POST /api/import``               -- trigger a SwimCloud import
-"""
+# REST API: teams, swimmers, events, results, and POST /api/import for SwimCloud.
 
 import logging
 
@@ -24,13 +14,11 @@ log = logging.getLogger(__name__)
 api_bp = Blueprint("api", __name__)
 
 
-# ── Teams ─────────────────────────────────────────────────────────────────────
-
 @api_bp.route("/teams")
 @login_required
 @cache.cached(timeout=120, query_string=True)
 def list_teams():
-    """Return all teams with swimmer counts."""
+    """All teams plus swimmer count."""
     teams = Team.query.order_by(Team.name).all()
     return jsonify([
         {
@@ -46,7 +34,7 @@ def list_teams():
 @login_required
 @cache.cached(timeout=120, query_string=True)
 def team_swimmers(team_id):
-    """Return swimmers for a given team, optionally filtered by gender."""
+    """Swimmers for one team; optional ?gender=M or F."""
     team = Team.query.get_or_404(team_id)
     gender = request.args.get("gender")
 
@@ -61,13 +49,11 @@ def team_swimmers(team_id):
     ])
 
 
-# ── Events ────────────────────────────────────────────────────────────────────
-
 @api_bp.route("/events")
 @login_required
 @cache.cached(timeout=300)
 def list_events():
-    """Return all known events."""
+    """All events (name + course)."""
     events = Event.query.order_by(Event.name).all()
     return jsonify([
         {"id": e.id, "name": e.name, "course": e.course}
@@ -75,15 +61,10 @@ def list_events():
     ])
 
 
-# ── Results ───────────────────────────────────────────────────────────────────
-
 @api_bp.route("/results")
 @login_required
 def query_results():
-    """Query times with optional filters.
-
-    Query params: ``team_id``, ``event_id``, ``season``, ``gender``, ``limit`` (default 50).
-    """
+    """Times with optional filters: team_id, event_id, season, gender, limit (max 200)."""
     team_id = request.args.get("team_id", type=int)
     event_id = request.args.get("event_id", type=int)
     season = request.args.get("season", type=int)
@@ -124,15 +105,10 @@ def query_results():
     ])
 
 
-# ── Import ────────────────────────────────────────────────────────────────────
-
 @api_bp.route("/import", methods=["POST"])
 @login_required
 def api_import():
-    """Trigger a SwimCloud import via the API.
-
-    JSON body: ``{"team_name": "Pittsburgh", "gender": "M", "year": 2025}``
-    """
+    """Import from SwimCloud. Body: {"team_name": "...", "gender": "M"|"F", "year": 2025}."""
     data = request.get_json(silent=True) or {}
     team_name = data.get("team_name", "").strip()
     gender = data.get("gender", "M")

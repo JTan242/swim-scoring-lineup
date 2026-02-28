@@ -1,16 +1,4 @@
-"""
-SQLAlchemy data models for the swim scoring application.
-
-Schema overview::
-
-    User  ──M:N──  Team  ──1:N──  Swimmer  ──1:N──  Time  ──N:1──  Event
-
-* ``User``     -- authenticated coach / analyst account.
-* ``Team``     -- a university swim team (e.g. "University of Pittsburgh").
-* ``Swimmer``  -- individual athlete belonging to one team.
-* ``Event``    -- a named event + course (e.g. "100 Free", course "Y" for SCY).
-* ``Time``     -- a single performance entry linking a swimmer, event, and season.
-"""
+# User ↔ Team (M:N), Team → Swimmer → Time ← Event.  Standard lineup/scoring schema.
 
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -18,16 +6,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db
 from sqlalchemy import Index
 
-# ── Association table (User <-> Team) ────────────────────────────────────────
-
 user_teams = db.Table(
     "user_teams",
     db.Column("user_id", db.Integer, db.ForeignKey("user.id")),
     db.Column("team_id", db.Integer, db.ForeignKey("team.id")),
 )
 
-
-# ── Models ───────────────────────────────────────────────────────────────────
 
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)

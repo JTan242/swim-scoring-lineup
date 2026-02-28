@@ -1,4 +1,4 @@
-"""Application configuration loaded from environment variables."""
+# Config from env; defaults work for local dev without a .env file.
 
 import os
 
