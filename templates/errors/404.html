@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Page Not Found – SwimScore{% endblock %}
+{% block content %}
+<div class="card" style="max-width:520px; margin:4rem auto; text-align:center;">
+  <h2 style="font-size:3rem; margin-bottom:.5rem;">404</h2>
+  <p style="font-size:1.1rem; color:#4a5568; margin-bottom:1.5rem;">
+    The page you're looking for doesn't exist.
+  </p>
+  <a href="{{ url_for('main.login') }}" class="btn btn-primary">Go Home</a>
+</div>
+{% endblock %}

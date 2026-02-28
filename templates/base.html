@@ -2,32 +2,239 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>SwimApp</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Swim Scoring & Lineup Optimizer{% endblock %}</title>
+  <style>
+    /* ── Reset & base ─────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                   "Helvetica Neue", Arial, sans-serif;
+      background: #f0f4f8;
+      color: #1a202c;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    /* ── Navigation ───────────────────────────────────────────────── */
+    nav {
+      background: linear-gradient(135deg, #1a365d 0%, #2b6cb0 100%);
+      padding: 0.8rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 2px 8px rgba(0,0,0,.15);
+    }
+    nav .brand {
+      color: #fff;
+      font-size: 1.15rem;
+      font-weight: 700;
+      text-decoration: none;
+      letter-spacing: 0.02em;
+    }
+    nav .brand span { opacity: .7; font-weight: 400; }
+    nav .links a {
+      color: rgba(255,255,255,.85);
+      text-decoration: none;
+      font-size: .9rem;
+      font-weight: 500;
+      margin-left: 1.5rem;
+      transition: color .15s;
+    }
+    nav .links a:hover { color: #fff; }
+
+    /* ── Layout ────────────────────────────────────────────────────── */
+    .container {
+      max-width: 1100px;
+      margin: 2rem auto;
+      padding: 0 1.5rem;
+    }
+
+    /* ── Cards ─────────────────────────────────────────────────────── */
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      padding: 2rem;
+      margin-bottom: 1.5rem;
+    }
+    .card h2 {
+      font-size: 1.35rem;
+      margin-bottom: 1.25rem;
+      color: #1a365d;
+    }
+    .card h3 {
+      font-size: 1.1rem;
+      margin-bottom: .75rem;
+      color: #2d3748;
+    }
+
+    /* ── Flash messages ────────────────────────────────────────────── */
+    .flash { padding: .75rem 1rem; border-radius: 6px; margin-bottom: 1rem; font-size: .9rem; }
+    .flash-success { background: #c6f6d5; color: #22543d; border-left: 4px solid #38a169; }
+    .flash-danger  { background: #fed7d7; color: #742a2a; border-left: 4px solid #e53e3e; }
+    .flash-warning { background: #fefcbf; color: #744210; border-left: 4px solid #d69e2e; }
+    .flash-info    { background: #bee3f8; color: #2a4365; border-left: 4px solid #3182ce; }
+
+    /* ── Form elements ─────────────────────────────────────────────── */
+    label { display: block; font-weight: 600; font-size: .85rem; color: #4a5568; margin-bottom: .25rem; }
+    input[type="text"],
+    input[type="password"],
+    input[type="number"],
+    select {
+      width: 100%;
+      padding: .55rem .75rem;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+      font-size: .95rem;
+      transition: border-color .15s, box-shadow .15s;
+      background: #fff;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #3182ce;
+      box-shadow: 0 0 0 3px rgba(49,130,206,.15);
+    }
+    .form-group { margin-bottom: 1rem; }
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    /* ── Buttons ────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-block;
+      padding: .55rem 1.25rem;
+      font-size: .9rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background .15s, transform .1s;
+    }
+    .btn:active { transform: scale(.97); }
+    .btn-primary { background: #2b6cb0; color: #fff; }
+    .btn-primary:hover { background: #2c5282; }
+    .btn-success { background: #38a169; color: #fff; }
+    .btn-success:hover { background: #2f855a; }
+    .btn-danger  { background: #e53e3e; color: #fff; }
+    .btn-danger:hover  { background: #c53030; }
+    .btn-secondary { background: #e2e8f0; color: #4a5568; }
+    .btn-secondary:hover { background: #cbd5e0; }
+    .btn-sm { padding: .35rem .8rem; font-size: .8rem; }
+    .btn-group { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: 1rem; }
+
+    /* ── Tables ─────────────────────────────────────────────────────── */
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    thead th {
+      background: #edf2f7;
+      color: #2d3748;
+      font-size: .8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      padding: .65rem .75rem;
+      text-align: left;
+      border-bottom: 2px solid #cbd5e0;
+    }
+    tbody td {
+      padding: .55rem .75rem;
+      font-size: .9rem;
+      border-bottom: 1px solid #edf2f7;
+    }
+    tbody tr:hover { background: #f7fafc; }
+    .relay-header td {
+      background: #ebf4ff;
+      font-weight: 700;
+      color: #2b6cb0;
+      padding: .6rem .75rem;
+      border-bottom: 2px solid #bee3f8;
+    }
+
+    /* ── Fieldset / checkbox list ──────────────────────────────────── */
+    fieldset {
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1rem;
+    }
+    fieldset legend {
+      font-weight: 700;
+      font-size: .9rem;
+      color: #2d3748;
+      padding: 0 .4rem;
+    }
+    fieldset label {
+      display: inline-flex;
+      align-items: center;
+      gap: .35rem;
+      font-weight: 500;
+      font-size: .9rem;
+      color: #4a5568;
+      margin: .25rem .75rem .25rem 0;
+    }
+    fieldset input[type="checkbox"] { accent-color: #2b6cb0; }
+
+    /* ── Utilities ─────────────────────────────────────────────────── */
+    .text-muted { color: #718096; font-size: .85rem; }
+    .mt-1 { margin-top: .5rem; }
+    .mt-2 { margin-top: 1rem; }
+    .mb-2 { margin-bottom: 1rem; }
+    .divider { border: none; border-top: 1px solid #e2e8f0; margin: 1.5rem 0; }
+    .pagination { display: flex; gap: .35rem; flex-wrap: wrap; justify-content: center; margin-top: 1rem; }
+    .loading { display: none; color: #d69e2e; font-weight: 600; margin-top: .75rem; }
+    .field-error { display: block; color: #e53e3e; font-size: .8rem; margin-top: .2rem; }
+
+    .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #fff;
+               border-top-color: transparent; border-radius: 50%; animation: spin .6s linear infinite;
+               vertical-align: middle; margin-right: .4rem; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .badge {
+      display: inline-block;
+      padding: .15rem .5rem;
+      border-radius: 4px;
+      font-size: .75rem;
+      font-weight: 600;
+    }
+    .badge-pts { background: #ebf4ff; color: #2b6cb0; }
+
+    /* ── Responsive ────────────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      nav { padding: .6rem 1rem; flex-direction: column; gap: .5rem; }
+      .form-row { grid-template-columns: 1fr; }
+      .container { padding: 0 1rem; }
+      .card { padding: 1.25rem; }
+    }
+  </style>
 </head>
 <body>
   <nav>
-    {% if current_user.is_authenticated %}
-      <a href="{{ url_for('main.scrape') }}">Import</a> |
-      <a href="{{ url_for('main.select') }}">Dashboard</a> |
-      <a href="{{ url_for('main.logout') }}">Logout</a>
-    {% else %}
-      <a href="{{ url_for('main.login') }}">Login</a> |
-      <a href="{{ url_for('main.register') }}">Register</a>
-    {% endif %}
+    <a class="brand" href="/">SwimScore <span>Lineup Optimizer</span></a>
+    <div class="links">
+      {% if current_user.is_authenticated %}
+        <a href="{{ url_for('main.scrape') }}">Import Data</a>
+        <a href="{{ url_for('main.select') }}">Dashboard</a>
+        <a href="{{ url_for('main.logout') }}">Logout</a>
+      {% else %}
+        <a href="{{ url_for('main.login') }}">Login</a>
+        <a href="{{ url_for('main.register') }}">Register</a>
+      {% endif %}
+    </div>
   </nav>
-  <hr>
-  <div>
-    {% with msgs = get_flashed_messages() %}
+
+  <div class="container">
+    {% with msgs = get_flashed_messages(with_categories=true) %}
       {% if msgs %}
-        <ul>
-          {% for m in msgs %}
-            <li>{{ m }}</li>
-          {% endfor %}
-        </ul>
+        {% for cat, msg in msgs %}
+          <div class="flash flash-{{ cat }}">{{ msg }}</div>
+        {% endfor %}
       {% endif %}
     {% endwith %}
+
     {% block content %}{% endblock %}
   </div>
 </body>
 </html>
-

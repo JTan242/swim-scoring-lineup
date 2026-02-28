@@ -1,19 +1,79 @@
 {% extends "base.html" %}
+{% block title %}Import Data – SwimScore{% endblock %}
 {% block content %}
-  <h2>Import Team Data</h2>
-  <form method="post">
+
+<div class="card">
+  <h2>Import Team Data from SwimCloud</h2>
+  <p class="text-muted mb-2">
+    Enter a team name (e.g. "Pittsburgh") and we'll search SwimCloud for a match,
+    then import the full roster and each swimmer's best time per event for the
+    selected season. Only one time per swimmer per event is kept.
+  </p>
+
+  <form method="post" onsubmit="showLoading();">
     {{ form.hidden_tag() }}
-    <p>{{ form.team_name.label }}<br>{{ form.team_name() }}</p>
-    <p>{{ form.team_id.label }}<br>{{ form.team_id() }}</p>
-    <p>{{ form.gender.label }}<br>{{ form.gender() }}</p>
-    <p>{{ form.year.label }}<br>{{ form.year() }}</p>
-    <p><button type="submit">Scrape Team Data</button></p>
+    <div class="form-group">
+      {{ form.team_name.label }}
+      {{ form.team_name(placeholder='e.g. Pittsburgh, Penn State, Michigan') }}
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        {{ form.gender.label }}
+        {{ form.gender() }}
+      </div>
+      <div class="form-group">
+        <label for="year">Season Year</label>
+        {{ form.year(id='year', oninput='updateSeasonHint()', placeholder='e.g. 2025') }}
+        <span class="text-muted">Enter the ending year (e.g. 2025 = 2024-2025 season)</span>
+        <span id="season-hint" style="display:block; color:#2b6cb0; font-weight:600; font-size:.85rem; margin-top:.2rem;"></span>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary">Import Team</button>
   </form>
 
-  {% if success %}
-    <div>
-      <strong>Done:</strong>
-      {{ swimmers_count }} swimmers imported, {{ times_count }} times recorded.
-    </div>
+  <div id="loading" class="loading">
+    Scraping roster and best times from SwimCloud &mdash; this may take 10-30 seconds&hellip;
+  </div>
+
+  {% if swimmers_count is defined %}
+  <div class="flash flash-success mt-2">
+    Import complete &mdash; {{ swimmers_count }} swimmers and {{ times_count }} best times recorded.
+  </div>
   {% endif %}
+</div>
+
+<div class="card">
+  <h3>Generate Test Data</h3>
+  <p class="text-muted mb-2">
+    Populates the database with two fictional teams (Pitt Panthers &amp; Penn State Lions),
+    ~20 swimmers each (M &amp; F), and realistic random times for the 2025 season.
+    Useful for exploring the app without scraping.
+  </p>
+  <form method="post" action="{{ url_for('main.seed_test_data') }}">
+    {{ form.hidden_tag() }}
+    <button type="submit" class="btn btn-secondary">Generate Test Data</button>
+  </form>
+</div>
+
+<script>
+function updateSeasonHint() {
+  var yr = parseInt(document.getElementById('year').value);
+  var hint = document.getElementById('season-hint');
+  if (!isNaN(yr) && yr >= 1997 && yr <= 2100) {
+    hint.textContent = 'This means the ' + (yr - 1) + '-' + yr + ' season.';
+  } else {
+    hint.textContent = '';
+  }
+}
+function showLoading() {
+  var btn = document.querySelector('button[type="submit"].btn-primary');
+  if (btn && !btn.disabled) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Importing\u2026';
+  }
+  document.getElementById('loading').style.display = 'block';
+}
+updateSeasonHint();
+</script>
+
 {% endblock %}
