@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Server Error – SwimScore{% endblock %}
+{% block content %}
+<div class="card" style="max-width:520px; margin:4rem auto; text-align:center;">
+  <h2 style="font-size:3rem; margin-bottom:.5rem;">500</h2>
+  <p style="font-size:1.1rem; color:#4a5568; margin-bottom:1.5rem;">
+    Something went wrong on our end. Please try again.
+  </p>
+  <a href="{{ url_for('main.login') }}" class="btn btn-primary">Go Home</a>
+</div>
+{% endblock %}

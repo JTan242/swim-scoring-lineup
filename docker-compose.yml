@@ -1,0 +1,28 @@
+services:
+  web:
+    build: .
+    ports:
+      - "5001:5001"
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - FLASK_DEBUG=false
+
+  # Optional PostgreSQL for production-like local dev (uncomment to use)
+  # postgres:
+  #   image: postgres:15-alpine
+  #   environment:
+  #     POSTGRES_USER: swim
+  #     POSTGRES_PASSWORD: swim
+  #     POSTGRES_DB: swim
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+  #
+  # Then set in .env: DATABASE_URL=postgresql://swim:swim@postgres:5432/swim
+
+# volumes:
+#   postgres_data:

@@ -1,10 +1,36 @@
 {% extends "base.html" %}
+{% block title %}Register – SwimScore{% endblock %}
 {% block content %}
-  <h2>Register</h2>
+<div class="card" style="max-width:420px; margin:3rem auto;">
+  <h2>Create Account</h2>
   <form method="post">
     {{ form.hidden_tag() }}
-    <p>{{ form.username.label }}<br>{{ form.username() }}</p>
-    <p>{{ form.password.label }}<br>{{ form.password() }}</p>
-    <p><button type="submit">Register</button></p>
+    <div class="form-group">
+      {{ form.username.label }}
+      {{ form.username(placeholder="Choose a username") }}
+      {% for err in form.username.errors %}
+        <span class="field-error">{{ err }}</span>
+      {% endfor %}
+    </div>
+    <div class="form-group">
+      {{ form.password.label }}
+      {{ form.password(placeholder="Choose a password") }}
+      <span class="text-muted">Min 8 chars, with uppercase, lowercase, and digit.</span>
+      {% for err in form.password.errors %}
+        <span class="field-error">{{ err }}</span>
+      {% endfor %}
+    </div>
+    <div class="form-group">
+      {{ form.confirm.label }}
+      {{ form.confirm(placeholder="Re-enter password") }}
+      {% for err in form.confirm.errors %}
+        <span class="field-error">{{ err }}</span>
+      {% endfor %}
+    </div>
+    <button type="submit" class="btn btn-primary" style="width:100%;">Register</button>
   </form>
+  <p class="text-muted mt-2" style="text-align:center;">
+    Already have an account? <a href="{{ url_for('main.login') }}">Sign in</a>
+  </p>
+</div>
 {% endblock %}
