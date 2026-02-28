@@ -1,4 +1,4 @@
-"""Flask-WTF form definitions for authentication, data import, and scoring."""
+# Forms for login, register, scrape (import), and dashboard selection.
 
 from flask_wtf import FlaskForm
 from wtforms import (
@@ -11,7 +11,7 @@ from wtforms.validators import (
 
 
 def _strong_password(form, field):
-    """Require >= 8 chars, one uppercase, one lowercase, one digit."""
+    """8+ chars, at least one upper, one lower, one digit."""
     pw = field.data or ""
     errors = []
     if len(pw) < 8:
@@ -27,7 +27,7 @@ def _strong_password(form, field):
 
 
 class MultiCheckboxField(SelectMultipleField):
-    """Renders a multi-select as a list of checkboxes."""
+    """Team/season choices as checkboxes instead of a dropdown."""
     widget = widgets.ListWidget(prefix_label=False)
     option_widget = widgets.CheckboxInput()
 

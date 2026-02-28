@@ -1,14 +1,4 @@
-"""
-Route handlers and scoring logic for the swim lineup optimizer.
-
-This module contains:
-* **Authentication** -- register, login, logout.
-* **Data import** -- scrape real data from SwimCloud or generate test data.
-* **Dashboard / scoring** -- select team-seasons and events, compute optimal
-  relay lineups (greedy and scored modes), and export results to Excel.
-
-Scoring tables follow NCAA Division I dual-meet rules.
-"""
+# Auth, scrape/seed, dashboard. Relay logic: greedy free relays, brute-force medley; NCAA dual-meet scoring.
 
 import datetime
 import random
@@ -30,8 +20,7 @@ import swimcloud_scraper as sc
 
 log = __import__('logging').getLogger(__name__)
 
-# ─── Constants ────────────────────────────────────────────────────────────────
-
+# NCAA dual-meet points: 1st–16th individual, then relay table
 INDIV_SCORE = [20, 17, 16, 15, 14, 13, 12, 11, 9, 7, 6, 5, 4, 3, 2, 1]
 RELAY_SCORE = [40, 34, 32, 30, 28, 26, 24, 22, 20, 16, 12, 10, 8, 6, 4, 2]
 
@@ -53,8 +42,6 @@ MEDLEY_STROKES = ['Back', 'Breast', 'Fly', 'Free']
 
 main = Blueprint('main', __name__)
 
-
-# ─── Generic helpers ──────────────────────────────────────────────────────────
 
 @login_manager.user_loader
 def load_user(uid):
@@ -111,8 +98,6 @@ def _parse_selected(selected):
     return team_ids, seasons
 
 
-# ─── Relay pool builders ─────────────────────────────────────────────────────
-
 def _build_free_pool(tid, yr, dist, excluded):
     rows = (
         db.session.query(Time, Swimmer.id, Swimmer.name)
@@ -133,7 +118,7 @@ def _build_free_pool(tid, yr, dist, excluded):
 
 
 def _build_medley_pools(tid, yr, excluded):
-    """Return per-stroke pools: ``{stroke: [{swimmer_id, name, time, time_id}, ...]}``."""
+    """Per-stroke pools: Back, Breast, Fly, Free -> list of {swimmer_id, name, time, time_id}."""
     stroke_pools = {}
     for stroke in MEDLEY_STROKES:
         rows = (
@@ -168,14 +153,8 @@ def build_all_pools(pairs, selected, relay_key, excluded):
     return pools
 
 
-# ─── Relay squad assembly ────────────────────────────────────────────────────
-
 def _best_medley_assignment(stroke_pools, used_ids=None):
-    """Brute-force the fastest 4-swimmer medley assignment.
-
-    *stroke_pools* is ``{stroke: [entry, ...]}``.  Each entry needs only a
-    time in that one stroke.  Returns ``(total_secs, legs_list)`` or None.
-    """
+    """Brute-force best 4 (one per stroke). stroke_pools = {stroke: [entries]}. Returns (total_secs, legs) or None."""
     if used_ids is None:
         used_ids = set()
 
@@ -211,7 +190,7 @@ def _best_medley_assignment(stroke_pools, used_ids=None):
 
 
 def pick_greedy_squads(pool, relay_key, top_n):
-    """Repeatedly pick the fastest 4 swimmers, remove them, repeat."""
+    """Take fastest 4, remove, repeat for up to top_n squads."""
     if relay_key == 'relay_medley':
         stroke_pools = pool
         squads = []
@@ -235,7 +214,7 @@ def pick_greedy_squads(pool, relay_key, top_n):
 
 
 def pick_scored_combos(pool, relay_key):
-    """Pick A (and optionally B) relay from one team's pool for scored mode."""
+    """A relay = fastest 4; B = next 4. For medley we brute-force then exclude those swimmers for B."""
     combos = []
     if relay_key != 'relay_medley':
         sp = sorted(pool, key=lambda x: x['time'])
@@ -275,10 +254,8 @@ def _attach_team_info(squads, key, choices_map):
         sq['team'], sq['season'] = label, season
 
 
-# ─── Result formatters ───────────────────────────────────────────────────────
-
 def squads_to_display_rows(squads, score_table=None):
-    """Flatten ranked squads into the dicts expected by select.html."""
+    """Turn squads into the row dicts select.html expects."""
     rows = []
     for rank, squad in enumerate(squads, start=1):
         pts = score_for(score_table, rank) if score_table else None
@@ -319,8 +296,6 @@ def _squads_to_excel_rows(squads, score_table=None):
             rows.append(row)
     return rows
 
-
-# ─── Excel export ─────────────────────────────────────────────────────────────
 
 def _write_sheet(writer, name, df):
     name = name[:31]
@@ -392,8 +367,6 @@ def build_excel(pairs, selected, team_ids, seasons, excluded, top_n, team_choice
     return output.getvalue()
 
 
-# ─── Auth routes ──────────────────────────────────────────────────────────────
-
 @main.route('/')
 def index():
     return redirect(url_for('main.login'))
@@ -431,12 +404,10 @@ def logout():
     return redirect(url_for('main.login'))
 
 
-# ─── Data import / seed ───────────────────────────────────────────────────────
-
 @main.route('/seed', methods=['POST'])
 @login_required
 def seed_test_data():
-    """Populate the DB with two realistic fake teams for testing."""
+    """Add two fake teams (Pitt, Penn State) with plausible names and times so you can click around."""
     MALE_FIRST = [
         'James','Michael','Ryan','Andrew','David','Tyler','Matt','Nick',
         'Chris','Jake','Ethan','Ben','Luke','Sam','Connor','Dylan',
@@ -526,7 +497,6 @@ def scrape():
         year   = form.year.data
         season = sc.season_label(year)
 
-        # Look up team ID from name via SwimCloud search
         try:
             matches = sc.search_teams(query)
         except Exception as e:
@@ -618,8 +588,6 @@ def scrape():
     return render_template('scrape.html', form=form)
 
 
-# ─── Dashboard & scoring ─────────────────────────────────────────────────────
-
 @main.route('/select', methods=['GET', 'POST'])
 @login_required
 def select():
@@ -629,7 +597,6 @@ def select():
         (f"{tid}:{yr}", f"{yr} {tname}") for tid, tname, yr in pairs
     ]
 
-    # Handle remove action
     if request.method == 'POST' and 'remove_ts' in request.form:
         selected = request.form.getlist('teams')
         if not selected:
@@ -649,7 +616,6 @@ def select():
         flash(f"Removed data for: {', '.join(removed)}.", "success")
         return redirect(url_for('main.select'))
 
-    # Build event dropdown
     relay_opts = [
         (key, f"{' '.join(key.split('_')[1:]).title()} Relay")
         for key in RELAYS
@@ -668,7 +634,6 @@ def select():
     if request.method != 'POST':
         return _render_select(form)
 
-    # ─── Parse POST data ─────────────────────────────────────────────────
     existing_excl = {int(x) for x in request.form.getlist('excluded') if x.isdigit()}
     raw_ids = [int(x) for x in request.form.getlist('time_id') if x.isdigit()]
     ev = request.form['event']
@@ -693,7 +658,6 @@ def select():
     team_ids, seasons = _parse_selected(selected)
     choices_map = dict(form.teams.choices)
 
-    # ─── Excel export (all events, regardless of selection) ───────────
     if 'export_excel' in request.form:
         data = build_excel(
             pairs, selected, team_ids, seasons,
@@ -705,7 +669,6 @@ def select():
             headers={'Content-Disposition': 'attachment;filename=swim_results.xlsx'},
         )
 
-    # ─── Individual event ─────────────────────────────────────────────
     if ev not in RELAYS:
         q = (
             db.session.query(
@@ -749,7 +712,6 @@ def select():
             })
         return _render_select(form, swimmers, excluded)
 
-    # ─── Relay display ────────────────────────────────────────────────
     pools = build_all_pools(pairs, selected, ev, excluded)
 
     if scoring == 'unscored':

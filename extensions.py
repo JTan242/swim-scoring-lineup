@@ -1,4 +1,4 @@
-"""Shared Flask extension instances (avoids circular imports)."""
+# Extensions live here so models/routes can import without circular deps.
 
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
