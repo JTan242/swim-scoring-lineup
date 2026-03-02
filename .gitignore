@@ -19,3 +19,8 @@ build/
 .vscode/
 *.swp
 *.swo
+
+gunicorn.ctl
+tmpclaude-*
+.claude/
+CLAUDE.md

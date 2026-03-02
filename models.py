@@ -6,22 +6,19 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db
 from sqlalchemy import Index
 
-user_teams = db.Table(
-    "user_teams",
-    db.Column("user_id", db.Integer, db.ForeignKey("user.id")),
-    db.Column("team_id", db.Integer, db.ForeignKey("team.id")),
+user_team_seasons = db.Table(
+    "user_team_seasons",
+    db.Column("user_id", db.Integer, db.ForeignKey("app_user.id"), primary_key=True),
+    db.Column("team_id", db.Integer, db.ForeignKey("team.id"), primary_key=True),
+    db.Column("season_year", db.Integer, primary_key=True),
 )
 
 
 class User(UserMixin, db.Model):
+    __tablename__ = "app_user"
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
-    password_hash = db.Column(db.String(128), nullable=False)
-    teams = db.relationship(
-        "Team",
-        secondary=user_teams,
-        backref=db.backref("users", lazy="dynamic"),
-    )
+    password_hash = db.Column(db.String(256), nullable=False)
 
     def set_password(self, pwd):
         self.password_hash = generate_password_hash(pwd)

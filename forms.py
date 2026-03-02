@@ -67,14 +67,30 @@ class ScrapeForm(FlaskForm):
 
 class SelectionForm(FlaskForm):
     teams = MultiCheckboxField("Team & Season", coerce=str)
+    gender = SelectField(
+        "Gender",
+        choices=[("M", "Men"), ("F", "Women")],
+        default="M",
+        validators=[DataRequired()],
+    )
     event = SelectField("Event", coerce=str, validators=[DataRequired()])
     top_n = IntegerField(
         "Number of places",
-        default=8,
-        validators=[DataRequired(), NumberRange(min=1, max=16)],
+        default=16,
+        validators=[DataRequired(), NumberRange(min=1)],
     )
     scoring_mode = SelectField(
-        "Relay Scoring Mode",
+        "Scoring",
         choices=[("unscored", "Non-Scoring"), ("scored", "Scoring")],
         default="unscored",
+    )
+    max_relays_per_team = SelectField(
+        "Max relays / team",
+        choices=[("0", "No limit")],
+        default="0",
+    )
+    relay_sort = SelectField(
+        "Sort relays by",
+        choices=[("speed", "Time"), ("points", "Points")],
+        default="speed",
     )

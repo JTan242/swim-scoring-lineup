@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from flask import Flask, render_template, jsonify
+from sqlalchemy import text
 from config import Config
 from extensions import db, login_manager, cache
 from routes import main as main_bp
@@ -48,13 +49,21 @@ def create_app(test_config=None):
     app.register_blueprint(api_bp, url_prefix="/api")
 
     with app.app_context():
-        db.create_all()
+        import time as _time
+        for attempt in range(5):
+            try:
+                db.create_all()
+                break
+            except Exception as e:
+                app.logger.warning("db.create_all() attempt %d failed: %s", attempt + 1, e)
+                db.session.rollback()
+                _time.sleep(1)
 
     @app.route("/health")
     def health():
         """Kubernetes/Docker liveness — just checks DB is reachable."""
         try:
-            db.session.execute("SELECT 1")
+            db.session.execute(text("SELECT 1"))
             return jsonify(status="ok", db="connected"), 200
         except Exception as e:
             return jsonify(status="error", db=str(e)), 503

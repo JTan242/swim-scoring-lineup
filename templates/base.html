@@ -97,10 +97,31 @@
       box-shadow: 0 0 0 3px rgba(49,130,206,.15);
     }
     .form-group { margin-bottom: 1rem; }
+    .form-group > label {
+      display: block;
+      margin-bottom: 2px;
+    }
+    .form-group > select,
+    .form-group > input[type="text"],
+    .form-group > input[type="number"],
+    .form-group > input[type="password"] {
+      display: block;
+      width: 100%;
+      min-width: 120px;
+      max-width: 220px;
+      box-sizing: border-box;
+    }
     .form-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 1rem;
+    }
+    .form-row[style] {
+      grid-template-columns: 1fr 1fr 1fr !important;
+    }
+    .form-row > .form-group {
+      min-width: 180px;
+      max-width: 240px;
     }
 
     /* ── Buttons ────────────────────────────────────────────────────── */
@@ -212,7 +233,7 @@
 </head>
 <body>
   <nav>
-    <a class="brand" href="/">SwimScore <span>Lineup Optimizer</span></a>
+    <a class="brand" href="{{ url_for('main.select') if current_user.is_authenticated else url_for('main.login') }}">SwimScore <span>Lineup Optimizer</span></a>
     <div class="links">
       {% if current_user.is_authenticated %}
         <a href="{{ url_for('main.scrape') }}">Import Data</a>
