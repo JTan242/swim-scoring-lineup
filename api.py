@@ -6,8 +6,11 @@ from flask import Blueprint, jsonify, request
 from flask_login import login_required, current_user
 
 from extensions import db, cache
-from models import Team, Swimmer, Event, Time
+from models import Team, Swimmer, Event, Time, user_team_seasons
 import swimcloud_scraper as sc
+
+from services.scoring import format_time
+from services.import_service import import_team
 
 log = logging.getLogger(__name__)
 
@@ -16,10 +19,16 @@ api_bp = Blueprint("api", __name__)
 
 @api_bp.route("/teams")
 @login_required
-@cache.cached(timeout=120, query_string=True)
 def list_teams():
-    """All teams plus swimmer count."""
-    teams = Team.query.order_by(Team.name).all()
+    """Teams the current user has access to, plus swimmer count."""
+    teams = (
+        db.session.query(Team)
+        .join(user_team_seasons, Team.id == user_team_seasons.c.team_id)
+        .filter(user_team_seasons.c.user_id == current_user.id)
+        .distinct()
+        .order_by(Team.name)
+        .all()
+    )
     return jsonify([
         {
             "id": t.id,
@@ -32,9 +41,17 @@ def list_teams():
 
 @api_bp.route("/teams/<int:team_id>/swimmers")
 @login_required
-@cache.cached(timeout=120, query_string=True)
 def team_swimmers(team_id):
-    """Swimmers for one team; optional ?gender=M or F."""
+    """Swimmers for one team; optional ?gender=M or F. Scoped to current user."""
+    has_access = db.session.execute(
+        user_team_seasons.select().where(
+            (user_team_seasons.c.user_id == current_user.id) &
+            (user_team_seasons.c.team_id == team_id)
+        )
+    ).first()
+    if not has_access:
+        return jsonify(error="Team not found"), 404
+
     team = Team.query.get_or_404(team_id)
     gender = request.args.get("gender")
 
@@ -65,18 +82,23 @@ def list_events():
 @login_required
 def query_results():
     """Times with optional filters: team_id, event_id, season, gender, limit (max 200)."""
-    team_id = request.args.get("team_id", type=int)
+    team_id  = request.args.get("team_id", type=int)
     event_id = request.args.get("event_id", type=int)
-    season = request.args.get("season", type=int)
-    gender = request.args.get("gender")
-    limit = request.args.get("limit", 50, type=int)
-    limit = min(limit, 200)
+    season   = request.args.get("season", type=int)
+    gender   = request.args.get("gender")
+    limit    = min(request.args.get("limit", 50, type=int), 200)
 
     q = (
         db.session.query(Time, Swimmer.name, Team.name, Event.name)
         .join(Time.swimmer)
         .join(Swimmer.team)
         .join(Time.event)
+        .join(
+            user_team_seasons,
+            (Team.id == user_team_seasons.c.team_id) &
+            (Time.season_year == user_team_seasons.c.season_year),
+        )
+        .filter(user_team_seasons.c.user_id == current_user.id)
     )
 
     if team_id:
@@ -89,8 +111,6 @@ def query_results():
         q = q.filter(Swimmer.gender == gender)
 
     rows = q.order_by(Time.time_secs).limit(limit).all()
-
-    from routes import format_time
 
     return jsonify([
         {
@@ -109,10 +129,10 @@ def query_results():
 @login_required
 def api_import():
     """Import from SwimCloud. Body: {"team_name": "...", "gender": "M"|"F", "year": 2025}."""
-    data = request.get_json(silent=True) or {}
+    data      = request.get_json(silent=True) or {}
     team_name = data.get("team_name", "").strip()
-    gender = data.get("gender", "M")
-    year = data.get("year")
+    gender    = data.get("gender", "M")
+    year      = data.get("year")
 
     if not team_name or not year:
         return jsonify(error="team_name and year are required"), 400
@@ -132,67 +152,21 @@ def api_import():
         return jsonify(error=f'No teams found for "{team_name}"'), 404
 
     match = matches[0]
-    sc_team_id = match["id"]
-    sc_team_name = match["name"]
 
     try:
-        events_data, roster_map = sc.get_team_times(
-            team_id=sc_team_id, gender=gender, year=year,
-        )
+        result = import_team(match["id"], match["name"], gender, year, current_user.id)
+    except LookupError as e:
+        return jsonify(error=str(e)), 404
     except Exception as e:
         log.error("Import failed: %s", e)
         return jsonify(error=f"Import failed: {e}"), 502
 
-    from routes import get_or_create_event
-
-    team = Team.query.filter_by(name=sc_team_name).first() or Team(name=sc_team_name)
-    db.session.add(team)
-    db.session.flush()
-
-    swimmer_cache = {}
-    times_count = 0
-
-    for event_name, entries in events_data.items():
-        evobj = get_or_create_event(event_name)
-        for entry in entries:
-            sc_id = entry["swimmer_id"]
-            name = entry["swimmer_name"]
-            secs = entry["time_secs"]
-
-            if sc_id not in swimmer_cache:
-                swimmer_cache[sc_id] = (
-                    Swimmer.query.filter_by(name=name, team_id=team.id).first()
-                    or Swimmer(name=name, gender=gender, team_id=team.id)
-                )
-                db.session.add(swimmer_cache[sc_id])
-                db.session.flush()
-
-            swimmer = swimmer_cache[sc_id]
-            existing = Time.query.filter_by(
-                swimmer_id=swimmer.id,
-                event_id=evobj.id,
-                season_year=year,
-            ).first()
-
-            if existing:
-                if secs < float(existing.time_secs):
-                    existing.time_secs = secs
-                    times_count += 1
-                continue
-
-            db.session.add(Time(
-                swimmer_id=swimmer.id, event_id=evobj.id,
-                time_secs=secs, season_year=year,
-            ))
-            times_count += 1
-
-    db.session.commit()
-    cache.clear()
-
+    status = 200 if result.already_existed else 201
     return jsonify(
-        team=sc_team_name,
-        season=sc.season_label(year),
-        swimmers_imported=len(swimmer_cache),
-        times_imported=times_count,
-        events=len(events_data),
-    ), 201
+        team=result.team_name,
+        season=result.season_label,
+        message="Data already exists \u2014 linked to your account." if result.already_existed else None,
+        swimmers_imported=result.swimmer_count,
+        times_imported=result.times_count,
+        events=result.event_count,
+    ), status

@@ -11,7 +11,7 @@ import pytest
 from app import create_app
 from extensions import db
 from models import User, Team, Swimmer
-from routes import format_time, score_for, parse_time_to_seconds, INDIV_SCORE
+from services.scoring import format_time, score_for, parse_time_to_seconds, INDIV_SCORE
 
 TEST_PASSWORD = "Testpass1"
 
@@ -271,3 +271,83 @@ def test_health_endpoint(client, app):
     assert response.status_code == 200
     data = response.get_json()
     assert data["status"] == "ok"
+
+
+# ─── Data isolation ───────────────────────────────────────────────────────────
+
+def test_data_isolation_between_users(client, db_session, app):
+    """User A's seeded teams should not appear on User B's dashboard."""
+    with app.app_context():
+        # User A registers, logs in, seeds data
+        _register(client, "userA")
+        _login(client, "userA")
+        client.post("/seed", follow_redirects=True)
+        client.get("/logout")
+
+        # User B registers, logs in — should see no teams
+        _register(client, "userB")
+        _login(client, "userB")
+        response = client.get("/select", follow_redirects=True)
+        assert b"Pitt" not in response.data
+        assert b"Penn State" not in response.data
+
+
+def test_remove_sole_user_deletes_data(client, db_session, app):
+    """When only one user has a team-season, removing it deletes the data."""
+    with app.app_context():
+        _register(client)
+        _login(client)
+        client.post("/seed", follow_redirects=True)
+
+        team = Team.query.filter_by(name="Pitt Panthers").first()
+        assert team is not None
+        tid = team.id
+
+        response = client.post("/select", data={
+            "remove_ts": "1",
+            "teams": f"{tid}:2025",
+        }, follow_redirects=True)
+        assert b"Removed" in response.data
+
+        # Data deleted from DB because no other user has it
+        team = Team.query.filter_by(name="Pitt Panthers").first()
+        assert team is None
+        response = client.get("/select")
+        assert b"Pitt" not in response.data
+
+
+def test_remove_shared_team_preserves_data(client, db_session, app):
+    """When multiple users share a team-season, removing only unlinks."""
+    from models import user_team_seasons
+    with app.app_context():
+        # User A seeds data
+        _register(client, "userA")
+        _login(client, "userA")
+        client.post("/seed", follow_redirects=True)
+        client.get("/logout")
+
+        # User B also links the same team-season
+        _register(client, "userB")
+        _login(client, "userB")
+        team = Team.query.filter_by(name="Pitt Panthers").first()
+        assert team is not None
+        userB = User.query.filter_by(username="userB").first()
+        db.session.execute(
+            user_team_seasons.insert().values(
+                user_id=userB.id, team_id=team.id, season_year=2025,
+            )
+        )
+        db.session.commit()
+
+        # User A removes the team
+        client.get("/logout")
+        _login(client, "userA")
+        response = client.post("/select", data={
+            "remove_ts": "1",
+            "teams": f"{team.id}:2025",
+        }, follow_redirects=True)
+        assert b"Removed" in response.data
+
+        # Data preserved because User B still has it
+        team = Team.query.filter_by(name="Pitt Panthers").first()
+        assert team is not None

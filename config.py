@@ -15,4 +15,5 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     CACHE_TYPE = os.getenv("CACHE_TYPE", "SimpleCache")
+    CACHE_REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     CACHE_DEFAULT_TIMEOUT = int(os.getenv("CACHE_TIMEOUT", "300"))

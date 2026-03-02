@@ -9,20 +9,35 @@ services:
       - .env
     environment:
       - FLASK_DEBUG=false
+      - DATABASE_URL=postgresql://swim:swim@postgres:5432/swim
+      - CACHE_TYPE=RedisCache
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
-  # Optional PostgreSQL for production-like local dev (uncomment to use)
-  # postgres:
-  #   image: postgres:15-alpine
-  #   environment:
-  #     POSTGRES_USER: swim
-  #     POSTGRES_PASSWORD: swim
-  #     POSTGRES_DB: swim
-  #   volumes:
-  #     - postgres_data:/var/lib/postgresql/data
-  #   ports:
-  #     - "5432:5432"
-  #
-  # Then set in .env: DATABASE_URL=postgresql://swim:swim@postgres:5432/swim
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: swim
+      POSTGRES_PASSWORD: swim
+      POSTGRES_DB: swim
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U swim -d swim"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
 
-# volumes:
-#   postgres_data:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:

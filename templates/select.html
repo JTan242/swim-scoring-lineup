@@ -20,6 +20,15 @@
       {% endif %}
     </fieldset>
 
+    {% if form.gender is defined %}
+    <div class="form-row">
+      <div class="form-group">
+        {{ form.gender.label }}
+        {{ form.gender() }}
+      </div>
+    </div>
+    {% endif %}
+
     <div class="form-row">
       <div class="form-group">
         {{ form.event.label }}
@@ -31,10 +40,23 @@
       </div>
     </div>
 
-    {% if form.event.data in RELAYS %}
-    <div class="form-group">
-      {{ form.scoring_mode.label }}
-      {{ form.scoring_mode() }}
+    {% if (form.event.data or '') in RELAYS %}
+    <div class="form-row" style="grid-template-columns:1fr 1fr 1fr;">
+      <div class="form-group" style="max-width:160px;">
+        {{ form.scoring_mode.label }}
+        <small style="display:block;color:#fff;opacity:0;margin-top:-2px;margin-bottom:4px;">&nbsp;</small>
+        {{ form.scoring_mode() }}
+      </div>
+      <div class="form-group" style="max-width:160px;">
+        {{ form.max_relays_per_team.label }}
+        <small style="display:block;color:#888;margin-top:-2px;margin-bottom:4px;">for non-scoring mode</small>
+        {{ form.max_relays_per_team() }}
+      </div>
+      <div class="form-group" style="max-width:160px;" id="relay-sort-col">
+        {{ form.relay_sort.label }}
+        <small style="display:block;color:#888;margin-top:-2px;margin-bottom:4px;">for scoring mode</small>
+        {{ form.relay_sort() }}
+      </div>
     </div>
     {% endif %}
 
@@ -42,8 +64,8 @@
       <button type="submit" class="btn btn-primary">Get Top Swimmers</button>
       <button type="submit" name="export_excel" value="1" class="btn btn-success">Export All to Excel</button>
       <button type="submit" name="remove_ts" value="1" class="btn btn-danger btn-sm"
-              onclick="return confirm('Remove all data for the selected team/season(s)?');">
-        Remove Selected
+              onclick="return confirm('Remove the selected team-season(s) from your dashboard?');">
+        Remove Selected Team
       </button>
       <a href="{{ url_for('main.select') }}" class="btn btn-secondary btn-sm">Reset</a>
     </div>
@@ -59,12 +81,15 @@
     {{ form.hidden_tag() }}
 
     {# carry filters forward #}
-    {% for ts in form.teams.data %}
+    {% for ts in (form.teams.data or []) %}
       <input type="hidden" name="teams" value="{{ ts }}">
     {% endfor %}
-    <input type="hidden" name="event"        value="{{ form.event.data }}">
-    <input type="hidden" name="top_n"        value="{{ form.top_n.data }}">
-    <input type="hidden" name="scoring_mode" value="{{ form.scoring_mode.data }}">
+    <input type="hidden" name="gender"               value="{{ (form.gender.data | default('M')) if form.gender is defined else 'M' }}">
+    <input type="hidden" name="event"                 value="{{ form.event.data or '' }}">
+    <input type="hidden" name="top_n"                value="{{ form.top_n.data }}">
+    <input type="hidden" name="scoring_mode"          value="{{ form.scoring_mode.data }}">
+    <input type="hidden" name="max_relays_per_team"   value="{{ form.max_relays_per_team.data }}">
+    <input type="hidden" name="relay_sort"             value="{{ form.relay_sort.data }}">
 
     {% for s in swimmers %}
       <input type="hidden" name="time_id" value="{{ s.time_id }}">
@@ -77,7 +102,7 @@
       <thead>
         <tr>
           <th style="width:5%;">Use</th>
-          {% if form.event.data not in RELAYS %}
+          {% if (form.event.data or '') not in RELAYS %}
             <th style="width:5%;">#</th>
             <th>Swimmer</th>
             <th>Team (Season)</th>
@@ -94,12 +119,16 @@
         </tr>
       </thead>
 
-      {% if form.event.data in RELAYS %}
+      {% if (form.event.data or '') in RELAYS %}
         {% for group in swimmers|groupby('combo_rank') %}
         <tbody>
           <tr class="relay-header">
-            <td colspan="7">Relay #{{ group.grouper }}
-              {% if group.list[0].points %}
+            <td colspan="7">
+              Relay #{{ group.grouper }}
+              {% if group.list[0].relay_type %}
+                <span class="badge" style="margin-left:.4rem;">{{ group.list[0].relay_type }}</span>
+              {% endif %}
+              {% if group.list[0].points is not none %}
                 &nbsp;<span class="badge badge-pts">{{ group.list[0].points }} pts</span>
               {% endif %}
             </td>
@@ -128,7 +157,8 @@
           {% for s in swimmers %}
           <tr>
             <td>
-              <input type="checkbox" name="include_{{ loop.index0 }}"
+              <input type="checkbox" name="include_time_id"
+                     value="{{ s.time_id }}"
                      {% if s.time_id not in excluded %}checked{% endif %}>
             </td>
             <td>{{ s.combo_rank }}</td>
@@ -147,8 +177,47 @@
     </div>
   </form>
 
-  {% if swimmers|length > 16 and form.event.data not in RELAYS %}
+  {% if swimmers|length > 16 and (form.event.data or '') not in RELAYS %}
   <div class="pagination" id="pagination"></div>
+  {% endif %}
+
+  {% if pagination and pagination.total > pagination.page_size %}
+  <div class="pagination" style="margin-top:1rem;display:flex;gap:1rem;align-items:center;">
+    {% set last_page = (pagination.total // pagination.page_size) + (1 if pagination.total % pagination.page_size else 0) %}
+    {% if pagination.page > 1 %}
+      <form method="post" style="display:inline;">
+        {{ form.hidden_tag() }}
+        {% for ts in (form.teams.data or []) %}
+          <input type="hidden" name="teams" value="{{ ts }}">
+        {% endfor %}
+        <input type="hidden" name="gender" value="{{ (form.gender.data | default('M')) if form.gender is defined else 'M' }}">
+        <input type="hidden" name="event" value="{{ form.event.data or '' }}">
+        <input type="hidden" name="top_n" value="{{ form.top_n.data }}">
+        <input type="hidden" name="scoring_mode" value="{{ form.scoring_mode.data }}">
+        <input type="hidden" name="max_relays_per_team" value="{{ form.max_relays_per_team.data }}">
+        <input type="hidden" name="relay_sort" value="{{ form.relay_sort.data }}">
+        <input type="hidden" name="page" value="{{ pagination.page - 1 }}">
+        <button type="submit" class="btn btn-secondary btn-sm">Prev</button>
+      </form>
+    {% endif %}
+    <span>Page {{ pagination.page }} of {{ last_page }}</span>
+    {% if pagination.page < last_page %}
+      <form method="post" style="display:inline;">
+        {{ form.hidden_tag() }}
+        {% for ts in (form.teams.data or []) %}
+          <input type="hidden" name="teams" value="{{ ts }}">
+        {% endfor %}
+        <input type="hidden" name="gender" value="{{ (form.gender.data | default('M')) if form.gender is defined else 'M' }}">
+        <input type="hidden" name="event" value="{{ form.event.data or '' }}">
+        <input type="hidden" name="top_n" value="{{ form.top_n.data }}">
+        <input type="hidden" name="scoring_mode" value="{{ form.scoring_mode.data }}">
+        <input type="hidden" name="max_relays_per_team" value="{{ form.max_relays_per_team.data }}">
+        <input type="hidden" name="relay_sort" value="{{ form.relay_sort.data }}">
+        <input type="hidden" name="page" value="{{ pagination.page + 1 }}">
+        <button type="submit" class="btn btn-secondary btn-sm">Next</button>
+      </form>
+    {% endif %}
+  </div>
   {% endif %}
 </div>
 {% endif %}
@@ -157,7 +226,17 @@
 (function() {
   var forms = document.querySelectorAll('form');
   forms.forEach(function(form) {
-    form.addEventListener('submit', function() {
+    form.addEventListener('submit', function(e) {
+      /* Preserve the clicked button's name/value as a hidden field
+         BEFORE disabling it — disabled buttons are excluded from form data. */
+      var clicked = e.submitter;
+      if (clicked && clicked.name && clicked.value) {
+        var hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = clicked.name;
+        hidden.value = clicked.value;
+        form.appendChild(hidden);
+      }
       var btns = form.querySelectorAll('button[type="submit"]');
       btns.forEach(function(b) {
         if (!b.disabled) {
@@ -167,8 +246,11 @@
       });
     });
   });
-
-  {% if swimmers and swimmers|length > 16 and form.event.data not in RELAYS %}
+})();
+</script>
+{% if swimmers and swimmers|length > 16 and (form.event.data or '') not in RELAYS %}
+<script>
+(function() {
   var PAGE_SIZE = 16;
   var tbody = document.querySelector('.card:last-of-type table tbody');
   var rows = Array.from(tbody.querySelectorAll('tr'));
@@ -195,8 +277,25 @@
 
   window.__showPage = showPage;
   showPage(1);
-  {% endif %}
 })();
 </script>
+{% endif %}
+
+<script>
+      function updateRelaySortVisibility() {
+        var scoring = document.querySelector('[name="scoring_mode"]');
+        var relaySortCol = document.getElementById('relay-sort-col');
+        if (scoring && relaySortCol) {
+          relaySortCol.style.visibility = (scoring.value === 'scored') ? 'visible' : 'hidden';
+        }
+      }
+      document.addEventListener('DOMContentLoaded', function() {
+        var scoring = document.querySelector('[name="scoring_mode"]');
+        if (scoring) {
+          scoring.addEventListener('change', updateRelaySortVisibility);
+          updateRelaySortVisibility();
+        }
+      });
+    </script>
 
 {% endblock %}
