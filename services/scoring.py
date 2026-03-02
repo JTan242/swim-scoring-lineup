@@ -1,10 +1,12 @@
 # Domain logic: NCAA scoring tables, relay pool building, and squad selection.
-# No Flask dependencies — safe to import and test standalone.
 
+import logging
 from collections import defaultdict
 
-from extensions import db
+from extensions import db, cache
 from models import Team, Swimmer, Time
+
+log = logging.getLogger(__name__)
 
 # NCAA dual-meet points: 1st–16th individual, then relay table
 INDIV_SCORE = [20, 17, 16, 15, 14, 13, 12, 11, 9, 7, 6, 5, 4, 3, 2, 1]
@@ -43,7 +45,20 @@ def parse_time_to_seconds(ts: str) -> float:
     return int(parts[0]) * 60 + float(parts[1])
 
 
-def _build_free_pool(tid, yr, dist, excluded, gender):
+# ── Cached pool builders ────────────────────────────────────────
+# The full, unfiltered pool is cached per (team, season, gender).
+# Exclusions are applied in memory after retrieval so the cache
+# stays stable regardless of which times a coach toggles.
+
+def _query_free_pool(tid, yr, dist, gender):
+    """Query DB for full free-relay pool (uncached helper)."""
+    cache_key = f"freepool:{tid}:{yr}:{dist}:{gender}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        log.debug("cache HIT  %s", cache_key)
+        return cached
+
+    log.debug("cache MISS %s — querying DB", cache_key)
     rows = (
         db.session.query(Time, Swimmer.id, Swimmer.name)
         .join(Time.swimmer)
@@ -56,15 +71,24 @@ def _build_free_pool(tid, yr, dist, excluded, gender):
         .order_by(Time.time_secs)
         .all()
     )
-    return [
+    pool = [
         {'time_id': tr.id, 'swimmer_id': sid, 'name': nm,
          'time': float(tr.time_secs), 'stroke': 'Free'}
-        for tr, sid, nm in rows if tr.id not in excluded
+        for tr, sid, nm in rows
     ]
+    cache.set(cache_key, pool)
+    return pool
 
 
-def _build_medley_pools(tid, yr, excluded, gender):
-    """Per-stroke pools: Back, Breast, Fly, Free -> list of {swimmer_id, name, time, time_id}."""
+def _query_medley_pools(tid, yr, gender):
+    """Query DB for full medley stroke pools (uncached helper)."""
+    cache_key = f"medley:{tid}:{yr}:{gender}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        log.debug("cache HIT  %s", cache_key)
+        return cached
+
+    log.debug("cache MISS %s — querying DB", cache_key)
     stroke_pools = {}
     for stroke in MEDLEY_STROKES:
         rows = (
@@ -82,9 +106,21 @@ def _build_medley_pools(tid, yr, excluded, gender):
         stroke_pools[stroke] = [
             {'swimmer_id': sid, 'name': nm,
              'time': float(tr.time_secs), 'time_id': tr.id}
-            for tr, sid, nm in rows if tr.id not in excluded
+            for tr, sid, nm in rows
         ]
+    cache.set(cache_key, stroke_pools)
     return stroke_pools
+
+
+def _filter_excluded(pool, excluded):
+    """Remove excluded time IDs from a flat pool list."""
+    return [e for e in pool if e['time_id'] not in excluded]
+
+
+def _filter_medley_excluded(stroke_pools, excluded):
+    """Remove excluded time IDs from every stroke in a medley pool dict."""
+    return {stroke: [e for e in entries if e['time_id'] not in excluded]
+            for stroke, entries in stroke_pools.items()}
 
 
 def build_all_pools(pairs, selected, relay_key, excluded, gender):
@@ -94,9 +130,11 @@ def build_all_pools(pairs, selected, relay_key, excluded, gender):
         if key not in selected:
             continue
         if relay_key == 'relay_medley':
-            pools[key] = _build_medley_pools(tid, yr, excluded, gender)
+            raw = _query_medley_pools(tid, yr, gender)
+            pools[key] = _filter_medley_excluded(raw, excluded)
         else:
-            pools[key] = _build_free_pool(tid, yr, RELAYS[relay_key], excluded, gender)
+            raw = _query_free_pool(tid, yr, RELAYS[relay_key], gender)
+            pools[key] = _filter_excluded(raw, excluded)
     return pools
 
 
