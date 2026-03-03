@@ -139,39 +139,65 @@ def build_all_pools(pairs, selected, relay_key, excluded, gender):
 
 
 def _best_medley_assignment(stroke_pools, used_ids=None):
-    """Brute-force best 4 (one per stroke). stroke_pools = {stroke: [entries]}. Returns (total_secs, legs) or None."""
+    """Branch-and-bound best 4 (one per stroke, no swimmer repeated).
+
+    stroke_pools = {stroke: [entries sorted by time]}.
+    Candidates per stroke are sorted ascending, capped at top 10, and
+    pruned when partial_sum + optimistic remaining bound >= best known.
+    Because candidates are sorted, once a stroke candidate triggers the
+    bound we *break* (all later candidates are slower).
+
+    Returns (total_secs, legs) or None if any stroke has no candidates.
+    """
     if used_ids is None:
         used_ids = set()
 
+    ordered = MEDLEY_STROKES          # ['Back', 'Breast', 'Fly', 'Free']
     filtered = {}
-    for stroke in MEDLEY_STROKES:
+    for stroke in ordered:
         candidates = [e for e in stroke_pools.get(stroke, [])
-                       if e['swimmer_id'] not in used_ids]
+                      if e['swimmer_id'] not in used_ids]
         if not candidates:
             return None
-        filtered[stroke] = candidates[:10]
+        filtered[stroke] = sorted(candidates[:10], key=lambda x: x['time'])
 
-    best = None
-    for b in filtered['Back']:
-        for br in filtered['Breast']:
-            if br['swimmer_id'] == b['swimmer_id']:
+    # Precompute optimistic suffix bound: sum of fastest available per remaining stroke
+    min_times = [filtered[s][0]['time'] for s in ordered]
+    suffix_min = [0.0] * 5            # suffix_min[4] = 0 (no strokes left)
+    for d in range(3, -1, -1):
+        suffix_min[d] = min_times[d] + suffix_min[d + 1]
+
+    best_total = [float('inf')]
+    best_legs  = [None]
+
+    def _search(depth, used, partial_sum, legs):
+        if depth == 4:
+            if partial_sum < best_total[0]:
+                best_total[0] = partial_sum
+                best_legs[0]  = legs[:]
+            return
+
+        stroke = ordered[depth]
+        for cand in filtered[stroke]:
+            if cand['swimmer_id'] in used:
                 continue
-            for fl in filtered['Fly']:
-                if fl['swimmer_id'] in (b['swimmer_id'], br['swimmer_id']):
-                    continue
-                for fr in filtered['Free']:
-                    if fr['swimmer_id'] in (b['swimmer_id'], br['swimmer_id'],
-                                             fl['swimmer_id']):
-                        continue
-                    tot = b['time'] + br['time'] + fl['time'] + fr['time']
-                    if best is None or tot < best[0]:
-                        best = (tot, [
-                            {**b,  'stroke': 'Back'},
-                            {**br, 'stroke': 'Breast'},
-                            {**fl, 'stroke': 'Fly'},
-                            {**fr, 'stroke': 'Free'},
-                        ])
-    return best
+
+            new_sum = partial_sum + cand['time']
+            # Prune: sorted candidates mean all remaining are ≥ this one
+            if new_sum + suffix_min[depth + 1] >= best_total[0]:
+                break
+
+            used.add(cand['swimmer_id'])
+            legs.append({**cand, 'stroke': stroke})
+            _search(depth + 1, used, new_sum, legs)
+            legs.pop()
+            used.discard(cand['swimmer_id'])
+
+    _search(0, set(), 0.0, [])
+
+    if best_legs[0] is None:
+        return None
+    return (best_total[0], best_legs[0])
 
 
 def pick_greedy_squads(pool, relay_key, top_n):
